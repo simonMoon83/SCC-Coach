@@ -95,6 +95,7 @@ SCCoach/
 │   ├── PhaseDetector.swift         # 페이즈 전이 (§6.5)
 │   ├── SupplyReader.swift
 │   ├── SupplyGate.swift            # OCR 타당성 게이트 (§6.1)
+│   ├── ResourceReader.swift        # 미네랄 OCR — macro.float 원천 (§6.1)
 │   ├── ClockReader.swift           # 게임 시간축의 원천 — 시계 OCR (§4.7)
 │   ├── MinimapReader.swift
 │   ├── FlashDetector.swift         # 위치별 깜빡임 검출 (§6.2)
@@ -238,10 +239,12 @@ struct GameState {
     // 인게임 관측 (Extractor만 씀 — 불변규칙 1)
     var supply: (used: Int, max: Int)?            // SupplyGate 채택값만 (§6.1)
     var supplyHistory = RingBuffer<(t: TimeInterval, used: Int)>(capacity: 180)  // t = 게임 시간
+    var minerals: Int?                            // ResourceReader 채택값 (§6.1)
+    var mineralHistory = RingBuffer<(t: TimeInterval, value: Int)>(capacity: 60) // t = 게임 시간
     var myBase: CGPoint?                          // 미니맵 정규화
     var knownBases: [CGPoint] = []                // 확장 포함, 존 라벨링용
-    var minimapFlashing = false
-    var flashLocation: CGPoint?
+    var flashLocations: [CGPoint] = []            // 동시 다발 피격 — 토글 클러스터 전부 (§6.2)
+    var minimapFlashing: Bool { !flashLocations.isEmpty }
     var viewportRect: CGRect?                     // 미니맵 뷰포트 사각형 (isMe 폴백, §6.4)
     var minimapPalette: MinimapPalette = .playerColors   // Shift+Tab 토글 — 매 틱 감지 (§6.2)
     var allyColorIDs: Set<Int> = []               // 동맹 분류 (§6.4) — playerColors 팔레트용
@@ -321,6 +324,7 @@ struct Alert {
     let priority: Priority
     let refire: Refire
     let location: CGPoint?        // 미니맵 정규화 → 패닝 + 오버레이 링
+    var earconOnlyInCombat = false // true면 교전 중 음성 대신 전용 이어콘만 (동작 규칙 5)
 }
 
 enum Outcome { case played, queued, dropped(DropReason) }
@@ -340,7 +344,7 @@ final class AlertBus {
 2. `urgent` — 재생 중인 것을 즉시 중단하고 끼어듦
 3. `warn` — 재생 중이면 큐 대기 (최대 1개, 초과분 폐기)
 4. `tip` — 재생 중이면 즉시 폐기
-5. `combat == true`면 `tip` 전부 스킵 (엔진이 `s.isInCombat()`을 계산해 넘긴다 — 교전 중 빌드 팁 금지)
+5. `combat == true`면 `tip` 전부 스킵 (엔진이 `s.isInCombat()`을 계산해 넘긴다 — 교전 중 빌드 팁 금지). **예외**: `earconOnlyInCombat`인 tip은 음성 없이 전용 이어콘만 재생 — 생산 유휴처럼 교전 중이 정확한 타이밍인 신호는 말 대신 소리 한 톨로 전달한다
 
 ### 4.6 CoachCore / Pipeline
 
@@ -483,8 +487,10 @@ final class VoiceBank {
 
 ```
 캡처 33ms + 처리 10ms + framesHeld 확인 100ms + 재생 20ms ≈ 163ms
-urgent(깜빡임, framesHeld=1): ≈ 63ms
+urgent(깜빡임): 기계 지연 ≈ 63ms + 토글 3회 누적 ~0.5초 → 체감 ≈ 0.6초
 ```
+
+urgent의 지배 항은 기계가 아니라 토글 누적(오탐 필터)이다 — 필터 강도와 지연은 픽스처·실사용으로 튜닝하는 다이얼.
 
 ---
 
@@ -519,6 +525,8 @@ struct SupplyGate {
 
 ClockReader도 같은 원리를 쓴다(§4.7의 `observe` 게이트). 폐기·보류값은 `supplyHistory`에 들어가지 않아 `supplyGrowthRate` 오염이 차단된다.
 
+**ResourceReader** — 미네랄 카운터에 같은 파이프라인(크롭 → 확대 → 이진화 → OCR → 게이트)을 적용한다. 주기 0.5s, `Regions.resources` 영역. `macro.float`(§8)의 원천 — 미네랄이 쌓인다 = 생산이 멈췄다.
+
 ### 6.2 MinimapReader
 
 1. 미니맵 크롭 (`Regions`에서 좌표)
@@ -533,8 +541,9 @@ ClockReader도 같은 원리를 쓴다(§4.7의 `observe` 게이트). 폐기·�
 struct FlashDetector {
     /// 미니맵을 64×64 셀로 다운샘플한 경보색 마스크의 셀별 on/off 전환 이력을 유지.
     /// 같은 셀이 1.2초(스트림) 창 내 3회 이상 토글하면 깜빡임.
-    /// 토글 셀을 8-이웃 클러스터링(기존 Clustering 재사용) → 최대 클러스터 중심 = flashLocation
-    mutating func observe(alertMask: [Bool], size: CGSize, atStream t: TimeInterval) -> CGPoint?
+    /// 토글 셀을 8-이웃 클러스터링(기존 Clustering 재사용) → **모든** 클러스터 중심 반환.
+    /// 최대 클러스터만 보고하면 중앙 대회전이 본진 견제의 깜빡임을 가린다 — 동시 다발 피격이 이 검출기의 존재 이유다.
+    mutating func observe(alertMask: [Bool], size: CGSize, atStream t: TimeInterval) -> [CGPoint]
     mutating func reset()
 }
 ```
@@ -619,7 +628,7 @@ struct Track {
 | ended(잠정) → inGame | 복귀 — **리셋 없음**. 진짜 새 게임은 반드시 lobby를 경유하므로 혼동 없음 |
 | any → replay | 재생 중단 + 규칙 평가 중단 |
 
-`resetInGame()` 대상: `supply, supplyHistory, myBase, knownBases, blips, tracks, minimapFlashing, flashLocation, viewportRect, allyColorIDs, allyClassified, allyBases, spawnCandidates, scoutStarted, buildStep, alertLog, clock`.
+`resetInGame()` 대상: `supply, supplyHistory, minerals, mineralHistory, myBase, knownBases, blips, tracks, flashLocations, viewportRect, allyColorIDs, allyClassified, allyBases, spawnCandidates, scoutStarted, buildStep, alertLog, clock`.
 GameState 밖 가변 상태(SupplyGate 직전값, FlashDetector 토글 이력, PhaseDetector 디바운스 카운터)는 extractor `reset()`이 담당한다 — 두 게임 연속 시 잔류 상태가 회귀 테스트 대상(§10).
 
 **Extractor 게이팅** (`activePhases`) — 인게임 중 LobbyReader의 쓰레기 OCR이 slots를 오염시키는 경로를 구조적으로 차단:
@@ -685,15 +694,18 @@ struct MapProfile: Codable {
 | ID | 우선순위 | 조건 | Refire |
 |---|---|---|---|
 | `supply.block` | warn | `(max-used)/rate < 20초` (게이트 통과값 기준) | `cooldown(25)` |
-| `minimap.flash` | urgent | FlashDetector 토글 클러스터 (§6.2) | `cooldown(5)` |
+| `minimap.flash` | urgent | FlashDetector 토글 클러스터 — 클러스터별 발화 (§6.2) | `cooldownPerPhrase(5)` |
 | `minimap.enemy` | warn | 내·아군 존 안 적(§6.4 판정) 클러스터 `pixels>=3 && framesHeld>=3` | `cooldownPerPhrase(10)` |
 | `minimap.air` | warn | `track.isAir && 내·아군 영역 진입` — 아군이면 "{시}시 아군 드랍 조심" | `cooldownPerPhrase(10)` |
+| `macro.float` | tip | 미네랄 ≥ 500 && 최근 30게임초 순증 ≥ 200 — "유닛 뽑아" (초기값, 튜닝 대상) | `cooldown(30)`, **교전 중 전용 이어콘만** (`earconOnlyInCombat`) |
 | `build.step` | tip | 확정 supply가 스텝 트리거 이상 — `supplyHistory` 마지막 2개 엔트리 모두 충족 시 | `oncePerKey("build.step.n")`, `onDelivery: [.advanceBuildStep]` |
 | `scout.timer` | tip | 게임시간 도달 && `!scoutStarted` | `oncePerGame` |
 | `scout.narrowed` | tip | 잔존 후보 1개 | `oncePerKey("scout.narrowed.i")` |
 | `scout.restored` | tip | 소거 후보에서 적 관측 → 정정 | `oncePerKey("scout.restored.i")` |
 
 `framesHeld >= 3` 조건이 오탐 필터의 핵심이다. 지나가는 단일 픽셀은 버리고 머무는 병력만 잡는다.
+
+**뷰포트 억제** — 위치 규칙(`minimap.flash`·`minimap.enemy`·`minimap.air`)은 location이 현재 `viewportRect` 안이면 발화하지 않는다. **보고 있는 곳은 말하지 않는다**: 중앙 대회전을 보는 중엔 중앙 urgent가 침묵하고, 시선 밖의 본진 견제만 소리가 난다 — 우선순위 역전(보는 곳엔 소리 지르고 못 보는 곳은 조용한 것) 방지가 목적이다. 억제는 쿨다운을 소모하지 않으므로 카메라가 떠난 뒤 상황이 지속되면 그때 발화한다. `viewportRect == nil`이면 억제하지 않는다(축소 동작). 규칙은 틱당 알림 1개 — 다중 위치는 다음 틱(+33ms)에 순차 발화된다.
 
 **비가역 결정의 3중 방어** (`build.step`): ① 게이트 통과값만 사용(§6.1) ② 연속 2회 관측 충족 ③ 발화당 스텝 1개 전진 + 다음 스텝 평가는 게임시간 2초 후 — 오독 하나가 여러 스텝을 태우는 경로가 사라진다. 롤백은 두지 않는다(진입 장벽 강화가 롤백 설계보다 단순).
 
@@ -776,7 +788,7 @@ struct MapProfile: Codable {
 **완료 기준**: 4스폰 맵에서 정찰 진행에 따라 후보가 줄고, 1개 남으면 알림.
 
 ### 7단계 — 빌드 플랜
-`BuildPlan`, `BuildStepRule`, JSON 11종(`plans/`), 게임 전 플랜 선택 UI(§11 — lobby 감지 시 표시).
+`BuildPlan`, `BuildStepRule`, JSON 11종(`plans/`), 게임 전 플랜 선택 UI(§11 — lobby 감지 시 표시), `ResourceReader`·`macro.float`(교전 중 생산 리마인더).
 **완료 기준**: 로비에서 선택한 플랜의 인구 트리거로 팁이 나오고, 교전 중에는 억제되며, 미선택 게임(팀전 기본)에서는 침묵.
 
 ### 8단계 — 공중/지상 분류
@@ -842,7 +854,7 @@ config.minimumFrameInterval = CMTime(value: 1, timescale: 30)
 ```swift
 struct Regions: Codable {
     let referenceSize: CGSize
-    let supply, clock, minimap, lobbySlots, center, replayBar: CGRect
+    let supply, resources, clock, minimap, lobbySlots, center, replayBar: CGRect
 }
 ```
 
@@ -897,5 +909,7 @@ OverlayWindow 정책: geometry 변화 시 `setFrame`, `isOnScreen == false`면 `
 | 팀전 빌드 팁 | 별도 스위치 없음 — 플랜 미선택 = 자연 침묵 | 모드별 규칙 비활성화 스위치보다 "플랜 없음 = 트리거 없음"이 단순 |
 | 미니맵 팔레트 (Shift+Tab) | 매 틱 자동 감지 + Blip/Track에 `faction` 분류 탑재 — 규칙은 팔레트 무지. 분류 자산은 위치(기지) 앵커라 왕복 토글에 불변(§6.4-6) | 게임 중 몇 번이든 토글 가능하므로 설정이 아니라 관측으로 처리. 모호 케이스(내 슬롯 색이 초록)는 두 팔레트의 분류 결과가 같아 무해 |
 | 아군 알림의 위치 특정 | 존 라벨 "{시}시 아군" + `cooldownPerPhrase` | 다인 팀전에서 "아군 본진"은 모호. 문장 단위 쿨다운이라 두 아군 동시 피격 시 각각 알림 (ruleID 단위면 둘째가 침묵) |
+| 중앙 교전 중 본진 견제 | FlashDetector 전 클러스터 보고 + flash도 `cooldownPerPhrase` + **뷰포트 억제** | 최대 클러스터만 보고하면 큰 교전이 작은 견제를 가림. "보고 있는 곳은 말하지 않는다" — 알림의 가치는 시선 밖 사건에 있고, 억제가 쿨다운을 안 먹어 시선이 떠나면 자연 재발화 |
+| 교전 중 생산 리마인더 | `macro.float`(미네랄 부유 감지) — 교전 중엔 음성 대신 전용 이어콘 1톨 | "전투 중에도 유닛 생산"이 프로·아마 격차의 본체. 음성은 마이크로를 방해하므로 교전 중엔 처리 비용 0에 가까운 이어콘으로만, 평시엔 음성 "유닛 뽑아" |
 | supply `used > max` | 허용 | 서플라이 파괴 시 실재하는 상태 |
 | FlashDetector 마스크 | "순수 빨강"은 가설 — 0단계 픽스처로 확정 | 경보가 자기 색↔밝음 토글이면 빨강 마스크는 무음. 색 전제를 실측 앞에 확정하지 않는다 |
