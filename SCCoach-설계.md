@@ -15,7 +15,7 @@
 - 게임 메모리 읽기, 프로세스 인젝션, 파일 후킹 — 일절 없음
 - 안티치트 회피, 입력 지터, 사람 흉내 타이밍 — 일절 없음
 
-이 앱이 접근하는 정보는 **플레이어 본인 화면에 이미 렌더링된 픽셀**뿐이다. 위 비범위 항목을 구현하는 코드가 들어가면 설계 위반으로 간주한다.
+이 앱이 **게임 중** 접근하는 정보는 **플레이어 본인 화면에 이미 렌더링된 픽셀**뿐이다. 유일한 예외는 **게임 종료 후** 본인 리플레이 파일(.rep)을 읽는 사후 분석(§13)이며, 그 결과는 실시간 코칭에 유입되지 않는다 — 리플레이 열람은 플레이어가 손으로 하던 복기와 같은 층위다. 위 비범위 항목을 구현하는 코드가 들어가면 설계 위반으로 간주한다.
 
 **지원 모드는 개인전(1v1·FFA)과 팀전이다.** 모드별 기능 범위는 §8.1 매트릭스를 따른다 — 개인전은 게임 전 빌드 선택 + 빌드 팁 + 미니맵 알림 전부, 팀전은 미니맵 위험 알림 중심(동맹 색 구분, §6.4)이고 빌드 팁은 플랜을 선택한 경우에만.
 
@@ -30,7 +30,7 @@
 | OCR | Vision (`VNRecognizeTextRequest`) |
 | 오디오 | AVAudioEngine + AVSpeechSynthesizer(사전 렌더링용) |
 | UI | SwiftUI + NSWindow(오버레이) |
-| 외부 의존성 | 없음 (전부 시스템 프레임워크) |
+| 외부 의존성 | 실시간 파이프라인: 없음 (전부 시스템 프레임워크). 사후 분석: `screp` CLI 동봉 (Apache-2.0, 서브프로세스 — §13) |
 
 **런타임 요구사항**
 - SC:R을 **테두리 없는 창모드**로 실행. 전체화면이면 오버레이가 표시되지 않음
@@ -129,8 +129,13 @@ SCCoach/
 ├── Plans/
 │   ├── BuildPlan.swift
 │   └── Resources/plans/*.json
+├── Replay/                         # 사후 분석 — 실시간 파이프라인과 완전 분리 (§13)
+│   ├── ReplayWatcher.swift         # ended 후 LastReplay.rep 갱신 감시
+│   ├── ScrepRunner.swift           # 번들 screp 서브프로세스 → JSON
+│   ├── ReplayReport.swift          # 헤더·빌드 타임라인·APM 모델
+│   └── PostGameAnalyzer.swift      # 알림 로그 × 리플레이 대조 → 분석 로그
 └── Tests/
-    ├── Fixtures/                   # supply/ minimap/ lobby/ phase/ flash/ gate/
+    ├── Fixtures/                   # supply/ minimap/ lobby/ phase/ flash/ gate/ replays/
     ├── SupplyReaderTests.swift
     ├── SupplyGateTests.swift
     ├── GameClockTests.swift
@@ -139,7 +144,8 @@ SCCoach/
     ├── CoachCoreTests.swift        # 결정성·두 게임 연속 리셋
     ├── ClusteringTests.swift
     ├── RuleTests.swift
-    └── AlertBusTests.swift
+    ├── AlertBusTests.swift
+    └── ReplayReportTests.swift     # 픽스처 .rep → 기대 리포트 (§13)
 ```
 
 ---
@@ -370,6 +376,8 @@ enum CoreOutput {
     case interrupt(Alert)                 // urgent
     case snapshot(GameState)              // 값 복사 — 상태 줄·링용
     case phaseChanged(from: Phase, to: Phase)
+    case log(AlertRecord)                 // 발화·폐기 전부(DropReason 포함) — §11 세션 로그 레코드
+    case gameEndedConfirmed               // ended(확정) 판정 틱에서만 방출 — §13 분석 트리거 (잠정 ended는 방출 안 함)
 }
 
 actor Pipeline {
@@ -390,6 +398,7 @@ actor Pipeline {
 | LobbyReader의 `.accurate` OCR | Pipeline actor | 수백 ms 점유하지만 로비에는 재생·긴급 알림이 없어 무해 (수용 근거) |
 | `AVAudioEngine` `scheduleBuffer`·`pan` | Pipeline actor에서 호출 | 스레드 안전. 버퍼는 전부 프리렌더라 실시간 스레드에 우리 코드 없음 |
 | WindowTracker 폴링 | 백그라운드 Task (4Hz) | §12.3 |
+| Replay 모듈 (Watcher·ScrepRunner·Analyzer) | AppCoordinator 소유 백그라운드 Task | **코어 밖** — 벽시계·파일시스템 사용이 불변규칙 5와 무관한 이유 (§13) |
 | OverlayWindow·SwiftUI | `@MainActor` | 스냅샷 스트림 구독. CoW라 복사 비용 미미 |
 
 기각: extractor별 병렬화(경합 관리 비용 대비 이득 없음 — 틱 최악 합계가 33ms 예산 내), `GameState`를 actor로(cross-actor `inout` 불법, 평가 도중 상태 찢어짐).
@@ -770,8 +779,9 @@ struct MapProfile: Codable {
 4. 테두리 없는 창모드에서 `.nominal` 캡처 버퍼 크기 == 창 포인트 크기 검증(§12.1)
 5. 팀 매치메이킹 게임 시작 직후 동맹 기지가 미니맵에 보이는지(공유 시야 기본 여부) 확인 → §6.4 동맹 분류 휴리스틱 확정
 6. Shift+Tab 미니맵 고정 팔레트 실측: 정확 RGB(나 초록·적 빨강, **동맹이 노랑인지 확인**), 플레이어 색 모드와의 구분 가능성, 양 모드 스크린샷 확보 → §6.2 팔레트 감지·진영 분류 확정
+7. SC:R이 게임 종료 시 LastReplay.rep을 남기는 macOS 실제 경로·쓰기 지연 확인 → §13 ReplayWatcher 기본 경로
 
-**완료 기준**: 6개 확인 결과가 본 문서에 기입됨.
+**완료 기준**: 7개 확인 결과가 본 문서에 기입됨.
 
 ### 1단계 — 픽스처 기반 인구수 인식
 `FrameSource` 프로토콜, `FixtureSource`, `Regions`, `SupplyReader`, 테스트.
@@ -809,6 +819,11 @@ struct MapProfile: Codable {
 `Tracker`, `isAir(on:clockRate:)` 지형 연동(§6.3), `AirUnitRule`.
 **완료 기준**: 드랍 착지 시 지상 병력과 구분해 알림.
 
+### 9단계 — 사후 리플레이 분석
+`ReplayWatcher`, `ScrepRunner`, `ReplayReport`, `PostGameAnalyzer` (§13).
+실시간 파이프라인과 완전 분리라 다른 단계와 병렬 가능 — 다만 대조할 알림 로그가 3단계부터 생기므로 그 뒤를 권장.
+**완료 기준**: 실게임 종료 후 60초 내 분석 로그(.json + .md)가 생성되고, 픽스처 .rep에 대해 `ReplayReportTests` 통과.
+
 ---
 
 ## 10. 테스트 전략
@@ -821,6 +836,7 @@ struct MapProfile: Codable {
 - `Tests/Fixtures/phase/` — 전이 시퀀스, 리플레이 바, 두 게임 연속
 - `Tests/Fixtures/flash/` — **실제 피격 경보 시퀀스(정탐)** + 빨강 플레이어 병력 이동(오탐), §6.2
 - `Tests/Fixtures/gate/` — OCR 오독 값 시퀀스 JSON (픽셀 불필요)
+- `Tests/Fixtures/replays/` — .rep 샘플(3종족·팀전·짧은 게임) + 기대 리포트 JSON. `ScrepRunner`는 번들 바이너리 실행이라 통합 테스트로 검증
 - 규칙 테스트는 `GameState`를 직접 조립해서 검증 (캡처·OCR 불필요)
 - `AlertBus` 테스트: 쿨다운·once, 인터럽트, 교전 중 tip 억제, `reset()` 격리
 
@@ -837,10 +853,10 @@ struct MapProfile: Codable {
 ## 11. 설정 · 권한
 
 - 최초 실행 시 화면 기록 권한 안내 + `SCShareableContent` 접근 실패 시 재안내. 세션 중 권한 상실은 `CaptureEvent.permissionLost`로 감지해 안내 재표시(§4.1) — 실질 방어선은 재시작 후 권한 재확인
-- 설정 항목: **`playerName`(isMe 식별용, §6.4)**, 종족별 기본 빌드 플랜, 음량, 이어콘 on/off, 규칙별 on/off, 오버레이 표시 여부, 수동 동맹 지정(커스텀 팀전 보정, §6.4)
+- 설정 항목: **`playerName`(isMe 식별용, §6.4)**, 종족별 기본 빌드 플랜, 음량, 이어콘 on/off, 규칙별 on/off, 오버레이 표시 여부, 수동 동맹 지정(커스텀 팀전 보정, §6.4), 리플레이 자동 분석 on/off·리플레이 폴더 경로(§13)
 - **게임 전 빌드 선택**: PhaseDetector가 lobby를 감지하면 앱 창에 플랜 선택 UI 표시(오버레이 아님). 선택 = 이번 게임의 활성 플랜(VoiceBank 프리렌더 갱신, §5.1), 미선택 = `build.step` 비활성 — 팀전 기본값
 - 캘리브레이션: 해상도 자동 감지의 대상은 **첫 `Frame.size`(캡처 버퍼)**다(§12.2). 대응 JSON 없으면 크롭 영역 수동 지정 UI
-- 로그: `~/Library/Logs/SCCoach/` 에 세션별 알림 로그 — `Outcome`의 `DropReason` 포함 (튜닝용)
+- 로그: `~/Library/Logs/SCCoach/` — ① 세션별 알림 로그: `CoreOutput.log`의 `AlertRecord`를 append. 레코드 = {스트림 시각, **게임 시각**(발화 시점 `clock.gameTime()` 환산 — 사후 환산이 불가능하므로 기록 시점 환산 필수), ruleID, phrase·once 키, priority, Outcome(DropReason 포함)}. `GameState.alertLog`(용량 64)는 isInCombat 판정용, 파일 로그(무제한)는 튜닝·§13 분석용 — 역할 분리 ② 게임별 사후 분석 로그(§13)
 
 ---
 
@@ -905,6 +921,47 @@ OverlayWindow 정책: geometry 변화 시 `setFrame`, `isOnScreen == false`면 `
 
 ---
 
+## 13. 사후 리플레이 분석 — screp
+
+실시간 파이프라인은 뭉개진 픽셀로 "알아채고", 리플레이 파일은 게임이 남긴 **정답지**다(전 커맨드·정확한 시각). 둘의 대조가 코칭 품질을 감이 아니라 데이터로 튜닝하게 한다.
+
+**원칙 3가지** (§0 예외 조항의 구체화)
+
+1. 각 판의 리플레이는 **그 판이 끝난 뒤(`ended` 확정)에만** 읽는다. 다음 판 시작과의 시간적 중첩은 무해 — 실시간 유입 금지는 원칙 2가 보장한다. watcher는 판당 1개(single-flight), 새 판 시작과 무관하게 완료·타임아웃까지 진행
+2. 분석 결과는 실시간 규칙·`GameState`에 **유입되지 않는다** (다음 게임 포함) — 로그와 앱 UI 전용
+3. 완전 분리 모듈 — 분석이 실패·지연돼도 코칭 파이프라인에 어떤 영향도 없다
+
+**흐름**
+
+```
+CoachCore: ended(확정) 판정 틱 → CoreOutput.gameEndedConfirmed
+  (잠정 ended는 방출하지 않는다 — 메뉴 열었다 닫는 것으로 분석이 오발 기동되는 경로 차단)
+  → AppCoordinator: ReplayWatcher 기동 — 리플레이 폴더에서 LastReplay.rep의 mtime 갱신 폴링
+    (2s 간격, 60s 타임아웃 — SC:R이 파일을 쓰기까지 지연이 있다. 경로는 0단계 7번 실측 + §11 수동 지정)
+  → ScrepRunner: 번들 screp 실행 `screp -cmds -computed <file>` → JSON 파싱 → ReplayReport
+  → PostGameAnalyzer: 세션 알림 로그(발화·DropReason·시각)와 대조
+  → ~/Library/Logs/SCCoach/<날짜>-<맵>.analysis.json (기계용) + .md (사람용 요약)
+```
+
+**분석 내용 (v1)**
+
+| 항목 | 원천 |
+|---|---|
+| 헤더: 맵·매치업·플레이어(이름·종족·색)·게임 길이 | screp header |
+| 승자 추정 — screp WinnerTeam(최대 잔류 팀 휴리스틱), **확정 아님을 로그에 명기** (.rep에 승패는 명시 저장되지 않음) | screp computed |
+| 내 빌드 타임라인: build/train/upgrade 커맨드의 시각·대상 | screp cmds |
+| APM / EAPM | screp computed |
+| **팁-실행 지연**: build.step 발화 시각 vs 실제 해당 건설 커맨드 시각 — 코칭이 실제로 행동을 만들었는지의 직접 지표 | 알림 로그 × cmds |
+| 알림 타임라인 병기: 발화·폐기 사유를 리플레이 사실 옆에 나란히 | 알림 로그 |
+
+isMe 매칭은 리플레이 플레이어 목록 ↔ `playerName`(§6.4 주 경로와 동일 원리 — 대소문자 무시·편집거리 1). 실패 시 전 플레이어 공통 정보만 기록.
+
+**screp 동봉**: [icza/screp](https://github.com/icza/screp) (Apache-2.0, 고지 동봉). 서브프로세스 실행 — 코드 링크 아님. 리플레이 포맷(레거시 PKWare / 모던 zlib 압축 + 커맨드 스트림) Swift 재구현은 비용 대비 가치가 없어 기각.
+
+동봉 계약: ① 공식 릴리스에 darwin-arm64가 없으므로 **소스에서 버전 태그 고정 빌드**(GOARCH=arm64/amd64 각각 → `lipo` 유니버설 바이너리) ② 앱 코드사인 단계에서 동봉 바이너리도 **hardened runtime으로 사인** — 공증(notarization) 통과 조건 ③ 릴리스 바이너리 직접 동봉은 arm64 부재로 기각.
+
+---
+
 ## 부록 A. 주요 설계 결정 기록 (v2)
 
 | 지점 | 결정 | 근거 한 줄 |
@@ -926,5 +983,6 @@ OverlayWindow 정책: geometry 변화 시 `setFrame`, `isOnScreen == false`면 `
 | 아군 알림의 위치 특정 | 존 라벨 "{시}시 아군" + `cooldownPerPhrase` | 다인 팀전에서 "아군 본진"은 모호. 문장 단위 쿨다운이라 두 아군 동시 피격 시 각각 알림 (ruleID 단위면 둘째가 침묵) |
 | 중앙 교전 중 본진 견제 | FlashDetector 전 클러스터 보고 + flash도 `cooldownPerPhrase` + **뷰포트 억제** | 최대 클러스터만 보고하면 큰 교전이 작은 견제를 가림. "보고 있는 곳은 말하지 않는다" — 알림의 가치는 시선 밖 사건에 있고, 억제가 쿨다운을 안 먹어 시선이 떠나면 자연 재발화 |
 | 교전 중 생산 리마인더 | `macro.float`(미네랄 부유 감지) — 교전 중엔 음성 대신 전용 이어콘 1톨 | "전투 중에도 유닛 생산"이 프로·아마 격차의 본체. 음성은 마이크로를 방해하므로 교전 중엔 처리 비용 0에 가까운 이어콘으로만, 평시엔 음성 "유닛 뽑아" |
+| 사후 리플레이 분석 (§13) | screp CLI 동봉 서브프로세스, ended 이후 전용·실시간 유입 금지 | 리플레이는 픽셀 추정의 정답지 — 팁-실행 지연 등으로 코칭 품질을 데이터로 튜닝. 픽셀-온리 원칙은 "게임 중" 한정으로 정밀화(사후 파일 읽기는 수동 복기와 같은 층위) |
 | supply `used > max` | 허용 | 서플라이 파괴 시 실재하는 상태 |
 | FlashDetector 마스크 | "순수 빨강"은 가설 — 0단계 픽스처로 확정 | 경보가 자기 색↔밝음 토글이면 빨강 마스크는 무음. 색 전제를 실측 앞에 확정하지 않는다 |
