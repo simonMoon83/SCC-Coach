@@ -3,13 +3,38 @@
   "race": "T",
   "desc": "vs 프로토스 — 벌처 압박 타이밍",
   "steps": [
-    { "supply": 9, "say": "서플 지어" },
-    { "supply": 11, "say": "배럭 지어" },
-    { "supply": 12, "say": "가스 지어" },
-    { "supply": 15, "say": "서플 지어" },
-    { "supply": 16, "say": "팩토리 지어" },
-    { "supply": 18, "say": "정찰 가" },
-    { "supply": 20, "say": "팩토리 추가" },
-    { "supply": 23, "say": "서플 지어" }
+    {
+      "supply": 9,
+      "say": "서플 지어"
+    },
+    {
+      "supply": 11,
+      "say": "배럭 지어"
+    },
+    {
+      "supply": 12,
+      "say": "가스 지어"
+    },
+    {
+      "supply": 15,
+      "say": "서플 지어"
+    },
+    {
+      "supply": 16,
+      "say": "팩토리 지어"
+    },
+    {
+      "supply": 18,
+      "kind": "scout",
+      "say": "정찰 가"
+    },
+    {
+      "supply": 20,
+      "say": "팩토리 추가"
+    },
+    {
+      "supply": 23,
+      "say": "서플 지어"
+    }
   ]
 }
