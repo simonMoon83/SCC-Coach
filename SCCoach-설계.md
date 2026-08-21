@@ -309,9 +309,10 @@ final class RuleEngine {
 enum Priority: Int, Comparable { case tip = 0, warn = 1, urgent = 2 }
 
 enum Refire: Equatable {
-    case cooldown(TimeInterval)   // 스트림 초
-    case oncePerGame              // 예: scout.timer
-    case oncePerKey(String)       // 예: "build.step.3", "scout.narrowed.2"
+    case cooldown(TimeInterval)          // 스트림 초, ruleID 단위
+    case cooldownPerPhrase(TimeInterval) // ruleID+문장 단위 — 존이 다르면 별개 쿨다운 (팀전 다중 아군 동시 피격 대응)
+    case oncePerGame                     // 예: scout.timer
+    case oncePerKey(String)              // 예: "build.step.3", "scout.narrowed.2"
 }
 
 struct Alert {
@@ -335,7 +336,7 @@ final class AlertBus {
 **AlertBus는 시계도, 상태도, 오디오도 모른다.** 시간은 인자로 주입되고 재생은 `Outcome`으로 반환된다 — 쿨다운·1회성·인터럽트·리셋 전부가 순수 단위 테스트 대상이다.
 
 **동작 규칙**
-1. `Refire` 위반 발화는 폐기 (`cooldown` 내 재발화, `once` 키 기발화)
+1. `Refire` 위반 발화는 폐기 (`cooldown` 내 재발화 — `cooldownPerPhrase`는 ruleID+문장 단위, `once` 키 기발화)
 2. `urgent` — 재생 중인 것을 즉시 중단하고 끼어듦
 3. `warn` — 재생 중이면 큐 대기 (최대 1개, 초과분 폐기)
 4. `tip` — 재생 중이면 즉시 폐기
@@ -445,7 +446,21 @@ final class VoiceBank {
 }
 ```
 
-문장 예: `"앞마당에 적"`, `"아군 본진에 적"`, `"6시 확정"`, `"서플 지어"`, `"드랍, 본진"`. 존 라벨: 본진, 앞마당, 삼룡이, 아군, 12시, 3시, 6시, 9시. (동맹을 색 이름으로 부르는 문장은 기각 — 문장 수 폭발 대비 위치 라벨이 더 유용)
+**음원 소스 3계층** — 카탈로그가 유한하고 전부 사전 렌더이므로, 음성의 자연스러움은 런타임 TTS 품질에 묶이지 않는다. VoiceBank는 문장 키 → 버퍼 조회일 뿐, 버퍼의 출처를 모른다:
+
+1. **번들 녹음 파일** (`Voice/<문장키>.wav`) — 사람 녹음 또는 외부 고품질 TTS로 1회 생성해 동봉. 가장 자연스러움. 수십 문장이라 녹음 10분 분량
+2. **캐시된 고품질 TTS** — 커스텀 플랜의 새 문장 등 번들에 없는 키를 최초 1회 생성해 `Application Support`에 캐시 (선택 사항, 외부 의존)
+3. **AVSpeechSynthesizer 폴백** — 위에 없는 문장. `ko-KR` 최고 품질 보이스(시스템 설정에서 "향상됨" 등급 다운로드 안내)를 지정. 품질은 떨어져도 새 문장이 자동으로 소리 나는 것을 보장
+
+문장 예: `"앞마당에 적"`, `"3시 아군에 적"`, `"3시 아군 드랍 조심"`, `"6시 확정"`, `"서플 지어"`, `"드랍, 본진"`.
+
+**존 라벨 (ZoneLabeler 계약)**
+- 내 기지 반경: 본진 / 앞마당 / 삼룡이
+- 아군 기지 반경(팀전): **"{시}시 아군"** — 어느 팀원인지 시계 방위로 특정한다. "아군 본진" 단독 라벨은 다인 팀전에서 모호해 기각
+- 그 외: "{시}시" — 미니맵 중심 기준 각도(atan2)를 12방위 시계 라벨로 변환. 스폰이 1·5·7·11시인 맵도 자연 대응
+- 동맹을 색 이름으로 부르는 문장은 기각 — 문장 수 폭발 대비 위치 라벨이 더 유용
+
+프리렌더 수: 시계 12방위 × 문형 3종("~에 적" / "~ 아군에 적" / "~ 아군 드랍 조심") + 내 기지 문형 + 플랜 문장 ≈ 수십 개 — 전량 렌더 예산 내.
 
 ### 5.2 공간화
 
@@ -671,8 +686,8 @@ struct MapProfile: Codable {
 |---|---|---|---|
 | `supply.block` | warn | `(max-used)/rate < 20초` (게이트 통과값 기준) | `cooldown(25)` |
 | `minimap.flash` | urgent | FlashDetector 토글 클러스터 (§6.2) | `cooldown(5)` |
-| `minimap.enemy` | warn | 내·아군 존 안 적(§6.4 판정) 클러스터 `pixels>=3 && framesHeld>=3` | `cooldown(10)` |
-| `minimap.air` | warn | `track.isAir && 내 영역 진입` | `cooldown(10)` |
+| `minimap.enemy` | warn | 내·아군 존 안 적(§6.4 판정) 클러스터 `pixels>=3 && framesHeld>=3` | `cooldownPerPhrase(10)` |
+| `minimap.air` | warn | `track.isAir && 내·아군 영역 진입` — 아군이면 "{시}시 아군 드랍 조심" | `cooldownPerPhrase(10)` |
 | `build.step` | tip | 확정 supply가 스텝 트리거 이상 — `supplyHistory` 마지막 2개 엔트리 모두 충족 시 | `oncePerKey("build.step.n")`, `onDelivery: [.advanceBuildStep]` |
 | `scout.timer` | tip | 게임시간 도달 && `!scoutStarted` | `oncePerGame` |
 | `scout.narrowed` | tip | 잔존 후보 1개 | `oncePerKey("scout.narrowed.i")` |
@@ -708,11 +723,13 @@ struct MapProfile: Codable {
 |---|---|---|
 | `supply.block` | ● | ● |
 | `minimap.flash` | ● | ● |
-| `minimap.enemy` / `minimap.air` | ● | ● — 동맹 색 제외(§6.4), 아군 본진 존 포함("아군 본진에 적") |
+| `minimap.enemy` / `minimap.air` | ● | ● — 동맹 색 제외(§6.4), 아군 존 포함 — 어느 아군인지 시계 방위로 특정("3시 아군에 적", "3시 아군 드랍 조심") |
 | `build.step` | ● (게임 전 플랜 선택, §11) | ○ — 플랜 미선택이 기본, 미선택이면 자연 침묵 |
 | `scout.*` | ● (1v1) | — |
 
 모드 분기는 각 규칙이 `s.mode`·`s.allyClassified`를 읽고 evaluate에서 스스로 nil 반환하는 방식이다 — 엔진에 모드 분기를 두지 않는다("규칙 추가 = 파일 하나" 원칙 유지). `build.step`은 모드를 모른다: 플랜이 없으면 트리거가 없을 뿐이다.
+
+팀 공유는 **플레이어가 육성(디스코드)·게임 채팅으로 중계**한다 — 앱은 입력을 보내지 않으므로(§0) 팀에게 직접 알릴 수 없고, 그래서 알림 문장이 "3시 아군 드랍 조심"처럼 **그대로 따라 말하면 되는 형태**여야 한다.
 
 ---
 
@@ -879,5 +896,6 @@ OverlayWindow 정책: geometry 변화 시 `setFrame`, `isOnScreen == false`면 `
 | 팀전 지원 | 동맹 분류 = 첫 3게임초 미니맵 가시성 휴리스틱, mode는 동맹 유무로 파생 | 공유 시야로 아군 기지만 시작부터 보임(0단계 5번 실측). 로비 팀 표기 OCR은 레이아웃 편차가 커 보조로 강등. FFA는 동맹 0으로 자연 처리 |
 | 팀전 빌드 팁 | 별도 스위치 없음 — 플랜 미선택 = 자연 침묵 | 모드별 규칙 비활성화 스위치보다 "플랜 없음 = 트리거 없음"이 단순 |
 | 미니맵 팔레트 (Shift+Tab) | 매 틱 자동 감지 + Blip/Track에 `faction` 분류 탑재 — 규칙은 팔레트 무지. 분류 자산은 위치(기지) 앵커라 왕복 토글에 불변(§6.4-6) | 게임 중 몇 번이든 토글 가능하므로 설정이 아니라 관측으로 처리. 모호 케이스(내 슬롯 색이 초록)는 두 팔레트의 분류 결과가 같아 무해 |
+| 아군 알림의 위치 특정 | 존 라벨 "{시}시 아군" + `cooldownPerPhrase` | 다인 팀전에서 "아군 본진"은 모호. 문장 단위 쿨다운이라 두 아군 동시 피격 시 각각 알림 (ruleID 단위면 둘째가 침묵) |
 | supply `used > max` | 허용 | 서플라이 파괴 시 실재하는 상태 |
 | FlashDetector 마스크 | "순수 빨강"은 가설 — 0단계 픽스처로 확정 | 경보가 자기 색↔밝음 토글이면 빨강 마스크는 무음. 색 전제를 실측 앞에 확정하지 않는다 |
