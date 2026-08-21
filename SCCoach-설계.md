@@ -17,7 +17,7 @@
 
 이 앱이 접근하는 정보는 **플레이어 본인 화면에 이미 렌더링된 픽셀**뿐이다. 위 비범위 항목을 구현하는 코드가 들어가면 설계 위반으로 간주한다.
 
-**v1 대상은 1v1이다.** 팀전 동맹 구분은 비범위 (`isEnemy = !isMe`, §6.4).
+**지원 모드는 개인전(1v1·FFA)과 팀전이다.** 모드별 기능 범위는 §8.1 매트릭스를 따른다 — 개인전은 게임 전 빌드 선택 + 빌드 팁 + 미니맵 알림 전부, 팀전은 미니맵 위험 알림 중심(동맹 색 구분, §6.4)이고 빌드 팁은 플랜을 선택한 경우에만.
 
 ---
 
@@ -35,6 +35,7 @@
 **런타임 요구사항**
 - SC:R을 **테두리 없는 창모드**로 실행. 전체화면이면 오버레이가 표시되지 않음
 - 화면 기록 권한(TCC) 필요. 최초 실행 시 안내 UI 표시
+- **게임 내 시계(타이머) 표시 상시 ON** — 게임 시간축의 원천(§4.7). OFF면 시간 트리거 정확도가 떨어지는 폴백으로 동작
 - 손쉬운 사용 권한 **불필요** — 입력을 보내지 않고, 창 추적도 CGWindowList 폴링이라 필요 없음(§12.3)
 
 ---
@@ -94,11 +95,11 @@ SCCoach/
 │   ├── PhaseDetector.swift         # 페이즈 전이 (§6.5)
 │   ├── SupplyReader.swift
 │   ├── SupplyGate.swift            # OCR 타당성 게이트 (§6.1)
-│   ├── ClockReader.swift           # 보조 — 시계가 실재하는 화면에서만 (§4.7)
+│   ├── ClockReader.swift           # 게임 시간축의 원천 — 시계 OCR (§4.7)
 │   ├── MinimapReader.swift
 │   ├── FlashDetector.swift         # 위치별 깜빡임 검출 (§6.2)
 │   ├── LobbyReader.swift
-│   ├── ColorTable.swift            # SC 플레이어 8색
+│   ├── ColorTable.swift            # 플레이어 8색 + 고정 팔레트 3색 (§6.2)
 │   ├── Clustering.swift            # 8-이웃 flood fill
 │   └── Tracker.swift               # 프레임 간 블립 연결
 ├── State/
@@ -202,19 +203,23 @@ protocol Extractor: AnyObject {
 
 ```swift
 enum Phase { case idle, lobby, inGame, ended, replay }
+enum GameMode { case solo, team }        // 동맹 관측 여부로 파생 (§6.4) — FFA는 solo 취급(전원 적)
+enum MinimapPalette { case playerColors, fixed }   // fixed = Shift+Tab: 나 초록·동맹 노랑·적 빨강 (0단계 6번 실측)
+enum Faction { case mine, ally, enemy, unknown }
 
 struct PlayerSlot {
     let index: Int
     let color: PlayerColor
     let race: Race?
     let isMe: Bool
-    let isEnemy: Bool          // v1: !isMe (팀전 비범위)
+    let isEnemy: Bool          // 내 색도 동맹 색도 아님 (§6.4)
 }
 
 struct Blip {                  // 미니맵 위 클러스터
     let center: CGPoint        // 미니맵 정규화 (0...1)
     let pixels: Int
-    let colorID: Int
+    let colorID: Int           // 클러스터링 내부 키 (활성 팔레트의 색 인덱스)
+    let faction: Faction       // 분류 시점 확정 (§6.2) — 규칙은 faction만 본다, 팔레트 무지
 }
 
 struct SpawnCandidate: Equatable { let point: CGPoint; var eliminated: Bool }
@@ -238,6 +243,12 @@ struct GameState {
     var minimapFlashing = false
     var flashLocation: CGPoint?
     var viewportRect: CGRect?                     // 미니맵 뷰포트 사각형 (isMe 폴백, §6.4)
+    var minimapPalette: MinimapPalette = .playerColors   // Shift+Tab 토글 — 매 틱 감지 (§6.2)
+    var allyColorIDs: Set<Int> = []               // 동맹 분류 (§6.4) — playerColors 팔레트용
+    var allyClassified = false                    // 분류 창(첫 3게임초) 종료 여부
+    var allyObserved = false                      // 어느 팔레트로든 동맹 관측됨
+    var allyBases: [CGPoint] = []                 // 동맹 본진 — 존 라벨 "아군"
+    var mode: GameMode { allyObserved ? .team : .solo }
     var blips: [Blip] = []
     var tracks: [Track] = []
 
@@ -380,12 +391,13 @@ actor Pipeline {
 struct ClockObservation: Equatable { let game: TimeInterval; let stream: TimeInterval }
 
 struct GameClock: Equatable {
-    private(set) var inGameStart: TimeInterval?   // inGame 확정 시 CoachCore가 기록 (스트림 시각)
-    var speedFactor: Double = 1.0                 // 게임초/스트림초. 래더는 Fastest 고정 — 0단계 실측 상수 (§9)
-    private(set) var anchor: ClockObservation?    // 보조: 화면 시계 OCR 관측 (시계가 실재할 때만)
+    private(set) var anchor: ClockObservation?    // 주 경로: 시계 OCR 관측 (§1 전제: 시계 상시 ON)
+    private(set) var rate: Double = 1.0           // 시계초/스트림초 — 관측쌍으로 추정 (0.5...2.0 클램프)
+    private(set) var isPaused = false             // OCR 2회 연속 동일 && 스트림 전진 → true
+    private(set) var inGameStart: TimeInterval?   // 폴백 앵커 — inGame 확정 시 CoachCore가 기록
 
-    /// 주 경로: (t - inGameStart) × speedFactor. inGame 밖(inGameStart == nil)이면 nil.
-    /// anchor가 있으면 anchor 기준으로 재정렬 — 일시정지·드리프트 보정
+    /// anchor 기준 rate 외삽 (단조 보장). anchor 미확보(인게임 초반·시계 OFF)면
+    /// (t - inGameStart) × 기본 상수(0단계 실측)로 폴백. inGame 밖이면 nil
     func gameTime(atStream t: TimeInterval) -> TimeInterval?
 
     /// ClockReader 전용. 값 감소·예측 대비 ±5초 초과 점프는 2회 연속 일치 시에만
@@ -394,7 +406,7 @@ struct GameClock: Equatable {
 }
 ```
 
-**주 경로가 OCR이 아닌 이유**: 라이브 대전 화면에는 경과 시간 표시가 없을 가능성이 높다(0단계에서 확인, §9). 그래서 게임 시간은 inGame 진입 앵커 + 고정 배속 상수로 만들고, ClockReader OCR은 시계가 실재하는 화면에서만 보정으로 쓴다. 시계가 없으면 일시정지를 감지하지 못해 정지 중 게임시간이 앞서가는 한계가 있다 — 멀티 일시정지는 드물어 수용.
+**게임 시간의 정의: 화면 시계가 표시하는 시간이다.** §1 전제(시계 상시 ON)로 OCR 앵커가 주 경로다 — BuildPlan `t`도 같은 시계 기준으로 작성하므로 "표시값이 게임 로직 시간인지 실시간인지"는 구분할 필요가 없다. `isPaused`면 게임축 트리거 평가는 전부 동결된다(스트림축 쿨다운은 계속 흐름). 시계가 꺼진 화면에서는 inGame 앵커 + 기본 상수 폴백으로 동작하되 정확도 저하를 상태 줄에 표시한다.
 
 **시간축 배정표** — 모든 "t"는 이 표를 따른다.
 
@@ -402,7 +414,7 @@ struct GameClock: Equatable {
 |---|---|
 | `supplyHistory.t`, `supplyGrowthRate` | Refire 쿨다운·once 이력, `alertLog.t` |
 | BuildPlan `t`/`delay`, `scout.timer` | `isInCombat` 10초 창 |
-| 정찰 체류 판정 (§7, `speedFactor`로 환산) | `Track.history.t`, `framesHeld`, 링 펄스 2초 |
+| 정찰 체류 판정 (§7, `rate`로 환산) | `Track.history.t`, `framesHeld`, 링 펄스 2초 |
 
 **튜플 규칙**: Equatable/Codable 합성이 필요한 저장 타입에는 튜플 대신 `ClockObservation` 같은 소형 struct를 쓴다 — Swift는 튜플의 프로토콜 준수를 지원하지 않는다.
 
@@ -433,7 +445,7 @@ final class VoiceBank {
 }
 ```
 
-문장 예: `"앞마당에 적"`, `"6시 확정"`, `"서플 지어"`, `"드랍, 본진"`. 존 라벨: 본진, 앞마당, 삼룡이, 12시, 3시, 6시, 9시.
+문장 예: `"앞마당에 적"`, `"아군 본진에 적"`, `"6시 확정"`, `"서플 지어"`, `"드랍, 본진"`. 존 라벨: 본진, 앞마당, 삼룡이, 아군, 12시, 3시, 6시, 9시. (동맹을 색 이름으로 부르는 문장은 기각 — 문장 수 폭발 대비 위치 라벨이 더 유용)
 
 ### 5.2 공간화
 
@@ -495,9 +507,12 @@ ClockReader도 같은 원리를 쓴다(§4.7의 `observe` 게이트). 폐기·�
 ### 6.2 MinimapReader
 
 1. 미니맵 크롭 (`Regions`에서 좌표)
-2. 각 픽셀을 `ColorTable`의 8색과 RGB 유클리드 거리 비교, 임계값 24
-3. 색상별 8-이웃 flood fill → `Blip` 배열
-4. **빨간 깜빡임 — `FlashDetector` (위치별 토글 검출)**. 전역 빨강 카운트는 쓰지 않는다 — 빨강은 플레이어 8색 중 하나라 상시 존재·출렁임으로 오발하거나 베이스라인에 묻힌다.
+2. **팔레트 감지** — SC:R은 Shift+Tab으로 미니맵 색을 고정 팔레트(나 초록·동맹 노랑·적 빨강)로 토글할 수 있고, 게임 중에도 바뀐다. 설정이 아니라 매 틱 관측으로 판정한다. 앵커: 내 기지(myBase/viewportRect) 클러스터 색이 고정-초록이면 `.fixed`. 내 슬롯 색이 초록이라 모호한 게임은 어느 팔레트로 읽어도 분류 결과가 같아 무해
+3. 각 픽셀을 활성 팔레트의 색 집합(`ColorTable` — 플레이어 8색 또는 고정 3색)과 RGB 유클리드 거리 비교, 임계값 24
+4. 색상별 8-이웃 flood fill → `Blip` 배열, 각 Blip에 **`faction` 부여**:
+   - `.playerColors`: `myColorID`/`allyColorIDs`(§6.4)로 분류
+   - `.fixed`: 초록=`.mine`, 노랑=`.ally`, 빨강=`.enemy` — 즉시 확정, §6.4 분류 창 불필요
+5. **빨간 깜빡임 — `FlashDetector` (위치별 토글 검출)**. 전역 빨강 카운트는 쓰지 않는다 — 플레이어 색 모드에선 빨강이 8색 중 하나고, **고정 모드에선 적 전체가 상시 빨강**이라 셀 토글 설계가 아니면 성립 자체가 안 된다.
 
 ```swift
 struct FlashDetector {
@@ -513,7 +528,7 @@ struct FlashDetector {
 
 **경보색 마스크 정의("순수 빨강" `R - max(G,B) ≥ 64`)는 가설이다.** 피격 경보가 자기 색↔밝음 토글이라면 빨강 마스크에는 잡히지 않는다. 마스크는 0단계 실측 픽스처(§9)로 확정한 뒤 이 절에 기입한다. `Fixtures/flash/`에는 실제 피격 경보 시퀀스(정탐)와 빨강 플레이어 병력 이동 시퀀스(오탐)를 **동급 필수**로 넣는다.
 
-5. 뷰포트 사각형: 흰색 직선 테두리 검출 → `state.viewportRect` (isMe 폴백용, §6.4)
+6. 뷰포트 사각형: 흰색 직선 테두리 검출 → `state.viewportRect` (isMe 폴백·팔레트 감지 앵커용)
 
 **SC:R 미니맵은 색을 블렌딩해서 그린다.** 순수 플레이어 색이 나오지 않으므로 임계값 튜닝이 필요하다. 픽스처로 검증할 것.
 
@@ -524,6 +539,7 @@ struct FlashDetector {
 ```swift
 struct Track {
     let colorID: Int
+    let faction: Faction       // 생성 시점 팔레트 기준 — 팔레트 토글 프레임에서는 트랙 재시작 허용 (드묾)
     var history: [(t: TimeInterval, p: CGPoint)] = []   // t = 스트림 시간
     var framesHeld: Int { history.count }
 
@@ -552,7 +568,13 @@ struct Track {
 
 1. **주 경로** (LobbyReader): §11 설정의 `playerName`과 슬롯 이름 OCR(`.accurate` — 로비는 정적이라 지연 무관)을 대소문자 무시 + 편집거리 1 이내로 매칭 → `isMe`, 그 슬롯 색 = `myColorID`
 2. **폴백** (MinimapReader): `phase == inGame && myColorID == nil && 게임시간 < 3초`일 때 미니맵 뷰포트 사각형(`viewportRect`) 중심에 가장 가까운 색 클러스터 = `myColorID`, 최근접 스폰 = `myBase` — 게임 시작 시 카메라는 반드시 내 본진에 있다. 관측 상태 쓰기이므로 불변규칙 1과 정합
-3. **팀전은 v1 비범위**: `isEnemy = !isMe`. 동맹 구분은 1v1 검증 후 별도 단계(§9 수직 슬라이스 원칙)
+**동맹 분류 (팀전)** — `.fixed` 팔레트(§6.2)에서는 노랑=동맹·빨강=적으로 즉시 끝난다. 아래는 `.playerColors` 팔레트용.
+
+3. **주 경로** (MinimapReader): 인게임 첫 3게임초 내 미니맵에 나타나는 내 색이 아닌 색 클러스터(`pixels ≥ 3 && framesHeld ≥ 3`) = 동맹 — 팀 매치메이킹은 공유 시야가 기본이라 아군 기지가 시작부터 보이고, 적은 안개 속이라 보이지 않는다(0단계 5번 실측으로 확정). 각 클러스터의 최근접 스폰 = `allyBases`. 3게임초 경과 시 `allyClassified = true`, 이후 새로 나타나는 색 = 적
+4. **모드 파생**: 어느 팔레트로든 동맹이 관측되면 `allyObserved = true`, `mode = .team` — 별도 감지 불요. FFA는 동맹 0개로 solo에 떨어져 전원 적 취급으로 올바르게 동작
+5. **적 판정**: Blip/Track의 `faction == .enemy`(§6.2에서 분류). `.playerColors`에서 색 의존 규칙은 `allyClassified` 전에는 침묵 — 분류 전 동맹을 적으로 오인하는 경로 차단
+6. **팔레트 왕복 대응**: 통일(고정)↔해제(플레이어 색)를 게임 중 몇 번을 오가도 된다. 분류 자산을 색이 아니라 **위치**(`myBase`·`allyBases` — 기지는 움직이지 않는다)에 앵커하기 때문: `.fixed`에서 노랑 클러스터로 `allyBases`를 확보해 두면, `.playerColors`로 풀리는 순간 그 위치의 클러스터 색 = 동맹 색으로 재학습(`allyColorIDs`), `myBase` 위치 클러스터 색 = `myColorID` 재확인. 게임을 고정 팔레트로 시작해 3게임초 분류 창을 놓친 경우도 같은 경로로 복구된다. `allyObserved`/`mode`는 관측 누적이라 팔레트 전환에 불변
+7. **한계**: 공유 시야가 없는 커스텀 팀전은 동맹이 늦게 나타나 적으로 오분류될 수 있다 → 수동 동맹 지정 UI(§11)로 보정. 로비 팀 표기 파싱은 레이아웃 편차가 커 보조 수단으로만 검토
 
 `myColorID == nil`이면 색 의존 규칙(`minimap.enemy`·`minimap.air`·scout 계열)은 evaluate에서 nil 반환으로 자기 비활성 — 오발보다 축소 동작.
 
@@ -582,7 +604,7 @@ struct Track {
 | ended(잠정) → inGame | 복귀 — **리셋 없음**. 진짜 새 게임은 반드시 lobby를 경유하므로 혼동 없음 |
 | any → replay | 재생 중단 + 규칙 평가 중단 |
 
-`resetInGame()` 대상: `supply, supplyHistory, myBase, knownBases, blips, tracks, minimapFlashing, flashLocation, viewportRect, spawnCandidates, scoutStarted, buildStep, alertLog, clock`.
+`resetInGame()` 대상: `supply, supplyHistory, myBase, knownBases, blips, tracks, minimapFlashing, flashLocation, viewportRect, allyColorIDs, allyClassified, allyBases, spawnCandidates, scoutStarted, buildStep, alertLog, clock`.
 GameState 밖 가변 상태(SupplyGate 직전값, FlashDetector 토글 이력, PhaseDetector 디바운스 카운터)는 extractor `reset()`이 담당한다 — 두 게임 연속 시 잔류 상태가 회귀 테스트 대상(§10).
 
 **Extractor 게이팅** (`activePhases`) — 인게임 중 LobbyReader의 쓰레기 OCR이 slots를 오염시키는 경로를 구조적으로 차단:
@@ -620,17 +642,17 @@ struct MapProfile: Codable {
 3. 미네랄 청색 픽셀 클러스터 → 확장 위치
 4. 자동 검출 실패 시 **수동 편집 UI**로 폴백 (맵당 한 번이므로 허용 가능)
 
-**정찰 소거 로직** — 시야(안개) 감지 extractor는 만들지 않는다. 밝기 기반 안개 분류는 타일셋별 튜닝 비용이 기능 가치를 넘고, 아래 체류 조건이 같은 정보를 더 견고하게 준다. 소거·복구·초기화는 전부 ScoutRule의 `StateEffect` 제안으로만 수행된다(불변규칙 4) — ScoutRule 전체가 `GameState` 조립만으로 테스트된다.
+**정찰 소거 로직** — 개인전 전용(§8.1). 다중 적의 스폰 소거·확정은 후속. 시야(안개) 감지 extractor는 만들지 않는다. 밝기 기반 안개 분류는 타일셋별 튜닝 비용이 기능 가치를 넘고, 아래 체류 조건이 같은 정보를 더 견고하게 준다. 소거·복구·초기화는 전부 ScoutRule의 `StateEffect` 제안으로만 수행된다(불변규칙 4) — ScoutRule 전체가 `GameState` 조립만으로 테스트된다.
 
 ```
 초기화: "mapProfile·myBase 확정 && spawnCandidates 비어 있음" 관측
        → effects: [.initializeSpawnCandidates(profile.spawns - myBase 최근접)]
 
-정찰 시작: 내 색 track(framesHeld ≥ 3)이 본진 존 밖으로 이동 중 관측
+정찰 시작: faction == .mine인 track(framesHeld ≥ 3)이 본진 존 밖으로 이동 중 관측
        → effects: [.markScoutStarted]
 
-소거: 내 색 track(framesHeld ≥ 3)이 후보 반경 0.06(정규화) 내에서
-     게임시간 1.5초 이상 체류(스트림 체류 × speedFactor 환산)
+소거: faction == .mine인 track(framesHeld ≥ 3)이 후보 반경 0.06(정규화) 내에서
+     게임시간 1.5초 이상 체류(스트림 체류 × clock.rate 환산)
      && 그동안 반경 내 적 색 blip 0개 → effects: [.eliminateSpawn(index:)]
      (정찰 유닛이 도착 직전 죽으면 track 소멸로 체류 미성립 — 잘못된 소거가 구조적으로 불가능)
 
@@ -649,7 +671,7 @@ struct MapProfile: Codable {
 |---|---|---|---|
 | `supply.block` | warn | `(max-used)/rate < 20초` (게이트 통과값 기준) | `cooldown(25)` |
 | `minimap.flash` | urgent | FlashDetector 토글 클러스터 (§6.2) | `cooldown(5)` |
-| `minimap.enemy` | warn | 내 존 안 적 클러스터 `pixels>=3 && framesHeld>=3` | `cooldown(10)` |
+| `minimap.enemy` | warn | 내·아군 존 안 적(§6.4 판정) 클러스터 `pixels>=3 && framesHeld>=3` | `cooldown(10)` |
 | `minimap.air` | warn | `track.isAir && 내 영역 진입` | `cooldown(10)` |
 | `build.step` | tip | 확정 supply가 스텝 트리거 이상 — `supplyHistory` 마지막 2개 엔트리 모두 충족 시 | `oncePerKey("build.step.n")`, `onDelivery: [.advanceBuildStep]` |
 | `scout.timer` | tip | 게임시간 도달 && `!scoutStarted` | `oncePerGame` |
@@ -676,6 +698,18 @@ struct MapProfile: Codable {
 
 **트리거는 `supply`가 기본, `t`(게임 초, §4.7)는 절대시간이 중요한 것만.** 스타 빌드는 원래 인구 기준이며, 시간 트리거로 짜면 자원 사고 한 번에 전부 어긋난다. `say`는 VoiceBank 문장 키(§5.1).
 
+### 8.1 모드별 기능 매트릭스
+
+| 규칙 | 개인전 (solo·FFA) | 팀전 (team) |
+|---|---|---|
+| `supply.block` | ● | ● |
+| `minimap.flash` | ● | ● |
+| `minimap.enemy` / `minimap.air` | ● | ● — 동맹 색 제외(§6.4), 아군 본진 존 포함("아군 본진에 적") |
+| `build.step` | ● (게임 전 플랜 선택, §11) | ○ — 플랜 미선택이 기본, 미선택이면 자연 침묵 |
+| `scout.*` | ● (1v1) | — |
+
+모드 분기는 각 규칙이 `s.mode`·`s.allyClassified`를 읽고 evaluate에서 스스로 nil 반환하는 방식이다 — 엔진에 모드 분기를 두지 않는다("규칙 추가 = 파일 하나" 원칙 유지). `build.step`은 모드를 모른다: 플랜이 없으면 트리거가 없을 뿐이다.
+
 ---
 
 ## 9. 개발 단계
@@ -684,12 +718,14 @@ struct MapProfile: Codable {
 
 ### 0단계 — 실측 확인 (코드 없음)
 실기 SC:R에서 확인해 이 문서에 기입:
-1. 라이브 대전 화면에 경과 시간 표시가 있는가 → 있으면 `Regions`에 위치 추가(GameClock OCR 보정 활성), 없으면 주 경로만(§4.7)
-2. Fastest 배속 상수(게임초/실초) 실측 → `GameClock.speedFactor`
+1. 시계 표시 위치·포맷(mm:ss 등) 스크린샷 확보 → `Regions.clock` 기입 (시계 상시 ON은 §1 전제로 확정 — 사용자 플레이 설정)
+2. Fastest 환산 기본 상수(시계초/실초) 실측 → 폴백 전용(§4.7 — 앵커 미확보 구간에만 사용)
 3. 피격 경보의 미니맵 픽셀 시그니처 녹화 → FlashDetector 마스크 확정(§6.2), `Fixtures/flash/` 정탐 케이스
 4. 테두리 없는 창모드에서 `.nominal` 캡처 버퍼 크기 == 창 포인트 크기 검증(§12.1)
+5. 팀 매치메이킹 게임 시작 직후 동맹 기지가 미니맵에 보이는지(공유 시야 기본 여부) 확인 → §6.4 동맹 분류 휴리스틱 확정
+6. Shift+Tab 미니맵 고정 팔레트 실측: 정확 RGB(나 초록·적 빨강, **동맹이 노랑인지 확인**), 플레이어 색 모드와의 구분 가능성, 양 모드 스크린샷 확보 → §6.2 팔레트 감지·진영 분류 확정
 
-**완료 기준**: 4개 확인 결과가 본 문서에 기입됨.
+**완료 기준**: 6개 확인 결과가 본 문서에 기입됨.
 
 ### 1단계 — 픽스처 기반 인구수 인식
 `FrameSource` 프로토콜, `FixtureSource`, `Regions`, `SupplyReader`, 테스트.
@@ -710,17 +746,17 @@ struct MapProfile: Codable {
 **완료 기준**: 로비에서 내 색과 적 색을 정확히 식별, 게임 시작 시 `GameState`에 주입됨.
 
 ### 5단계 — 미니맵 위험 알림
-`MinimapReader`, `Clustering`, `ZoneLabeler`, `FlashDetector`(§6.2), `MinimapDangerRule`, 패닝, `MinimapMapper`·오버레이 링(§12.3).
+`MinimapReader`, `Clustering`, `ZoneLabeler`, `FlashDetector`(§6.2), 동맹 분류·mode 파생(§6.4), `MinimapDangerRule`, 패닝, `MinimapMapper`·오버레이 링(§12.3).
 **착수 조건**: 0단계 3번의 피격 경보 픽스처 확보.
-**완료 기준**: 피해 발생 시 위치가 붙은 음성 + 미니맵 링 표시.
+**완료 기준**: 피해 발생 시 위치가 붙은 음성 + 미니맵 링 표시. 팀전에서 동맹 이동에는 침묵하고 적 진입에만 알림.
 
 ### 6단계 — 맵 프로필 + 정찰 소거
 `MapProfile` 생성/캐시, 수동 편집 UI, `ScoutRule`(초기화·소거·복구·확정, §7).
 **완료 기준**: 4스폰 맵에서 정찰 진행에 따라 후보가 줄고, 1개 남으면 알림.
 
 ### 7단계 — 빌드 플랜
-`BuildPlan`, `BuildStepRule`, JSON 3종.
-**완료 기준**: 인구 트리거로 팁이 나오고, 교전 중에는 억제됨.
+`BuildPlan`, `BuildStepRule`, JSON 3종, 게임 전 플랜 선택 UI(§11 — lobby 감지 시 표시).
+**완료 기준**: 로비에서 선택한 플랜의 인구 트리거로 팁이 나오고, 교전 중에는 억제되며, 미선택 게임(팀전 기본)에서는 침묵.
 
 ### 8단계 — 공중/지상 분류
 `Tracker`, `isAir(on:clockRate:)` 지형 연동(§6.3), `AirUnitRule`.
@@ -733,7 +769,7 @@ struct MapProfile: Codable {
 **픽스처가 이 프로젝트의 생명선이다.** 매번 스타를 켜서 검증하면 개발이 진행되지 않는다.
 
 - `Tests/Fixtures/supply/` — 스크린샷 + 기대값 JSON. 케이스: 막힘 직전, 두 자리, 세 자리, 종족 3종, 교전 중 이펙트 겹침
-- `Tests/Fixtures/minimap/` — 적 클러스터 유/무, 깜빡임 프레임 쌍, 오탐 유발 케이스(중립 유닛·이펙트)
+- `Tests/Fixtures/minimap/` — 적 클러스터 유/무, 깜빡임 프레임 쌍, 오탐 유발 케이스(중립 유닛·이펙트), **팔레트 양 모드(플레이어 색/Shift+Tab 고정 색) 각각 + 토글 전환 프레임 쌍**
 - `Tests/Fixtures/lobby/` — 2인/4인/8인 슬롯, 색상 조합
 - `Tests/Fixtures/phase/` — 전이 시퀀스, 리플레이 바, 두 게임 연속
 - `Tests/Fixtures/flash/` — **실제 피격 경보 시퀀스(정탐)** + 빨강 플레이어 병력 이동(오탐), §6.2
@@ -754,7 +790,8 @@ struct MapProfile: Codable {
 ## 11. 설정 · 권한
 
 - 최초 실행 시 화면 기록 권한 안내 + `SCShareableContent` 접근 실패 시 재안내. 세션 중 권한 상실은 `CaptureEvent.permissionLost`로 감지해 안내 재표시(§4.1) — 실질 방어선은 재시작 후 권한 재확인
-- 설정 항목: **`playerName`(isMe 식별용, §6.4)**, 종족별 빌드 플랜 선택, 음량, 이어콘 on/off, 규칙별 on/off, 오버레이 표시 여부
+- 설정 항목: **`playerName`(isMe 식별용, §6.4)**, 종족별 기본 빌드 플랜, 음량, 이어콘 on/off, 규칙별 on/off, 오버레이 표시 여부, 수동 동맹 지정(커스텀 팀전 보정, §6.4)
+- **게임 전 빌드 선택**: PhaseDetector가 lobby를 감지하면 앱 창에 플랜 선택 UI 표시(오버레이 아님). 선택 = 이번 게임의 활성 플랜(VoiceBank 프리렌더 갱신, §5.1), 미선택 = `build.step` 비활성 — 팀전 기본값
 - 캘리브레이션: 해상도 자동 감지의 대상은 **첫 `Frame.size`(캡처 버퍼)**다(§12.2). 대응 JSON 없으면 크롭 영역 수동 지정 UI
 - 로그: `~/Library/Logs/SCCoach/` 에 세션별 알림 로그 — `Outcome`의 `DropReason` 포함 (튜닝용)
 
@@ -828,13 +865,15 @@ OverlayWindow 정책: geometry 변화 시 `setFrame`, `isOnScreen == false`면 `
 | 상태 변경 메커니즘 | typed `StateEffect` + `effects`(즉시)/`onDelivery`(발화 시) 분리 | 알림 없는 소거와 발화-결합 전진을 한 틀로 다룸. 클로저 커밋은 로깅·동등성 비교 불가라 기각 |
 | 알림 이력 | RuleEngine 틱 안에서 `.logAlert`로 순방향 기록 | AlertBus→GameState 역방향 엣지보다 엣지 0개가 원칙 서술이 단순 |
 | 실행 모델 | Sans-IO `CoachCore` + actor 래핑 | 결정적 코어가 테스트 최상위 진입점. GameState actor화는 cross-actor `inout` 불법이라 기각 |
-| 게임 시간 | inGame 앵커 + 고정 배속 상수 주 경로, 시계 OCR은 보정 | 라이브 화면에 시계가 없을 가능성이 높음(0단계 확인). OCR 앵커 주 경로면 라이브에서 시간 트리거 전멸 |
+| 게임 시간 | 화면 시계 OCR 앵커 주 경로, inGame 앵커+상수는 폴백 | 시계 상시 ON을 런타임 전제로 확정(사용자 플레이 설정). "게임 시간 := 시계 표시값"으로 정의해 게임/실시간 구분 문제 소멸, 일시정지 감지 복원 |
 | 캡처 해상도 | `.nominal` 포인트 고정 | 2× 백킹 재캡처는 정보 이득 없고, 버퍼 불변이라 좌표·오버레이 전부 단순 |
 | windowLost 판정 | didStopWithError ∨ WindowTracker 소멸. 무수신 단독 판정 금지 | SCK는 정적 화면(로비)에서 프레임을 안 보냄 — 무수신 워치독은 오발 |
 | 시야(안개) 마스크 | 만들지 않음 — 체류 조건으로 대체 | 밝기 분류는 타일셋별 튜닝 비용이 기능 가치를 넘고 체류 조건이 더 견고 |
 | 정찰 소거 롤백 | `restoreSpawn` 채택 | 적 클러스터 관측은 반증이 명백해 정정 비용이 낮고, 잘못된 "확정"의 신뢰 손실이 큼 |
 | build.step 롤백 | 없음 — 진입 3중 방어로 대체 | 진입 장벽 강화가 롤백 설계보다 단순 |
 | 음성 렌더 | 문장 단위 사전 렌더 | 조합 수가 유한(수십 개)해 전량 렌더 가능, 조각 이어붙이기보다 억양 우위 |
-| 팀전 | v1 비범위 | 수직 슬라이스 원칙 — 반쯤 만들지 않는다 |
+| 팀전 지원 | 동맹 분류 = 첫 3게임초 미니맵 가시성 휴리스틱, mode는 동맹 유무로 파생 | 공유 시야로 아군 기지만 시작부터 보임(0단계 5번 실측). 로비 팀 표기 OCR은 레이아웃 편차가 커 보조로 강등. FFA는 동맹 0으로 자연 처리 |
+| 팀전 빌드 팁 | 별도 스위치 없음 — 플랜 미선택 = 자연 침묵 | 모드별 규칙 비활성화 스위치보다 "플랜 없음 = 트리거 없음"이 단순 |
+| 미니맵 팔레트 (Shift+Tab) | 매 틱 자동 감지 + Blip/Track에 `faction` 분류 탑재 — 규칙은 팔레트 무지. 분류 자산은 위치(기지) 앵커라 왕복 토글에 불변(§6.4-6) | 게임 중 몇 번이든 토글 가능하므로 설정이 아니라 관측으로 처리. 모호 케이스(내 슬롯 색이 초록)는 두 팔레트의 분류 결과가 같아 무해 |
 | supply `used > max` | 허용 | 서플라이 파괴 시 실재하는 상태 |
 | FlashDetector 마스크 | "순수 빨강"은 가설 — 0단계 픽스처로 확정 | 경보가 자기 색↔밝음 토글이면 빨강 마스크는 무음. 색 전제를 실측 앞에 확정하지 않는다 |
