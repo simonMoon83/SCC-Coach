@@ -102,6 +102,15 @@ final class ReplayReportTests: XCTestCase {
         XCTAssertTrue(report.notes.contains { $0.contains("컴퓨터") })
     }
 
+    func testCleanedMapNameStripsPipes() throws {
+        // 실측: "| iCCup | Fighting Spirit" — 파이프가 전적 마크다운 표를 깨뜨림
+        let json = Self.humanGameJSON.replacingOccurrences(
+            of: "\"Map\":\"TestMap\"",
+            with: "\"Map\":\"| iCCup | Fighting Spirit\"")
+        let out = try JSONDecoder().decode(ScrepOutput.self, from: Data(json.utf8))
+        XCTAssertEqual(out.cleanedMapName, "iCCup Fighting Spirit")
+    }
+
     func testZoneParsingFromPhrases() {
         XCTAssertEqual(PostGameAnalyzer.zone(fromPhrase: "6시 피격"), "6시")
         XCTAssertEqual(PostGameAnalyzer.zone(fromPhrase: "본진 아군 피격"), "본진")

@@ -32,7 +32,9 @@ public enum HistoryIndex {
         let responded = report.tipDelays.filter { $0.delaySeconds != nil }
         return GameRow(
             date: shortDate(report.replay.startTime),
-            map: report.replay.mapName,
+            map: report.replay.mapName
+                .replacingOccurrences(of: "|", with: " ")
+                .split(separator: " ").joined(separator: " "),   // 구 json 파이프 방어
             matchup: "\(raceLetter(me?.race ?? "?")) vs \(opp)",
             result: report.replay.myResult,
             durationSeconds: report.replay.durationSeconds,

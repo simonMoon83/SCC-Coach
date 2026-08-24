@@ -136,12 +136,14 @@ public struct ScrepOutput: Decodable {
 
     public var durationSeconds: Double { seconds(ofFrame: header.frames) }
 
-    /// 맵 이름의 색 제어 문자(<0x20)·인코딩 손상 대체 문자(U+FFFD) 제거 (실측:
-    /// 커스텀 맵 이름이 '\x05Polyp\x04oid …��' 형태로 온다)
+    /// 맵 이름의 색 제어 문자(<0x20)·인코딩 손상 대체 문자(U+FFFD)·파이프 제거.
+    /// 실측: '\x05Polyp\x04oid …��', '| iCCup | Fighting Spirit' — 파이프는
+    /// 마크다운 표 구분자를 깨뜨린다(전적 표 열 밀림, 실화면 확인)
     public var cleanedMapName: String {
-        String(header.map.unicodeScalars.filter {
-            $0.value >= 0x20 && $0.value != 0xFFFD
-        }).trimmingCharacters(in: .whitespaces)
+        let kept = String(header.map.unicodeScalars.filter {
+            $0.value >= 0x20 && $0.value != 0xFFFD && $0 != "|"
+        })
+        return kept.split(separator: " ").joined(separator: " ")
     }
 
     /// 커맨드 픽셀 좌표 → 맵 정규화 (0...1). Build(타일 좌표)는 normalizedTilePos 사용
