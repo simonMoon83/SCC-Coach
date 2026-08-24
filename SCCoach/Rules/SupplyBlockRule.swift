@@ -11,9 +11,19 @@ public struct SupplyBlockRule: Rule {
     public let id = "supply.block"
 
     static let neutralPhrase = "인구 막힌다"
-    /// 실사용 개인화 튜닝 (2026-08-24): 사용자 반응 중앙값 23~39초 실측 —
-    /// 20초 예고로는 알림이 반응 속도보다 늦다. 반응 여유를 포함해 35초로
-    static let horizonSeconds = 35.0
+    /// 실사용 개인화 튜닝 (2026-08-24, 사용자 지적 반영): 예고 = 반응 + 건설 + 여유.
+    /// 반응 중앙값 ~25초 실측 + 종족별 건설 시간(BW 프레임 실값 ÷ 23.81:
+    /// 서플·오버로드 600f=25.2초, 파일런 450f=18.9초) + 여유 3초.
+    /// "짓기 시작했는데 완성 전에 막히는" 케이스까지 커버
+    static let reactionSeconds = 25.0
+    static func horizonSeconds(for race: Race?) -> Double {
+        let buildTime: Double
+        switch race {
+        case .protoss: buildTime = 18.9
+        default: buildTime = 25.2      // 서플·오버로드 (미상도 보수적으로 긴 쪽)
+        }
+        return reactionSeconds + buildTime + 3.0
+    }
     static let rateWindow = 30.0
     static let cooldownSeconds = 25.0
 
@@ -44,10 +54,11 @@ public struct SupplyBlockRule: Rule {
               let rate = s.supplyGrowthRate(window: Self.rateWindow),
               rate > 0 else { return nil }
         let remaining = Double(supply.max - supply.used)
-        guard remaining / rate < Self.horizonSeconds else { return nil }
+        let race = Self.effectiveRace(s)
+        guard remaining / rate < Self.horizonSeconds(for: race) else { return nil }
         return Verdict(alert: Alert(
             ruleID: id,
-            phrase: Self.phrase(for: Self.effectiveRace(s)),
+            phrase: Self.phrase(for: race),
             priority: .warn,
             refire: .cooldown(Self.cooldownSeconds),
             location: nil))            // B-2 결정: location=nil → 이어콘·링 없이 음성만(pan 0)
