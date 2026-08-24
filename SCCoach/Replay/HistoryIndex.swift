@@ -13,6 +13,7 @@ public enum HistoryIndex {
         public let result: ReplayReport.GameResult?
         public let durationSeconds: Double
         public let apm: Int?
+        public let eapm: Int?
         public let supplyAlerts: Int
         public let tipResponded: Int
         public let tipTotal: Int
@@ -36,6 +37,7 @@ public enum HistoryIndex {
             result: report.replay.myResult,
             durationSeconds: report.replay.durationSeconds,
             apm: me?.apm,
+            eapm: me?.eapm,
             supplyAlerts: report.stats.byRule["supply.block"] ?? 0,
             tipResponded: responded.count,
             tipTotal: report.tipDelays.count,
@@ -52,14 +54,14 @@ public enum HistoryIndex {
         if rows.count >= 6 {
             md += trendLine(label: "이전", rows: Array(rows.dropLast(5)))
         }
-        md += "\n| 날짜 | 맵 | 매치업 | 결과 | 길이 | APM | 인구알림 | 팁응답 | 반응중앙값 | 오탐의심 |\n"
+        md += "\n| 날짜 | 맵 | 매치업 | 결과 | 길이 | APM/유효 | 인구알림 | 팁응답 | 반응중앙값 | 오탐의심 |\n"
         md += "|---|---|---|---|---|---|---|---|---|---|\n"
         for r in rows.reversed() {   // 최신이 위
             let d = Int(r.durationSeconds)
             md += "| \(r.date) | \(r.map) | \(r.matchup)"
             md += " | \(r.result?.short ?? "—")"
             md += " | \(d / 60):\(String(format: "%02d", d % 60))"
-            md += " | \(r.apm.map(String.init) ?? "—")"
+            md += " | \(r.apm.map { "\($0)/\(r.eapm ?? 0)" } ?? "—")"
             md += " | \(r.supplyAlerts)"
             md += " | \(r.tipResponded)/\(r.tipTotal)"
             md += " | \(r.tipMedianDelay.map { String(format: "%.0f초", $0) } ?? "—")"

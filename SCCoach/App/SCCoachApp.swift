@@ -23,11 +23,16 @@ struct SCCoachApp: App {
                     coordinator.start()
                 }
         }
+        // 앱 내 분석 열람 창 — [전적] 버튼으로 오픈 (사용자 요구: html·md 전부 앱 안에서)
+        Window("분석 열람", id: "reports") {
+            ReportBrowserView()
+        }
     }
 }
 
 struct StatusView: View {
     @EnvironmentObject var coordinator: AppCoordinator
+    @Environment(\.openWindow) private var openWindow
     @AppStorage("playerName") private var playerName = ""
 
     var body: some View {
@@ -90,17 +95,9 @@ struct StatusView: View {
         }
     }
 
-    /// 전적 대시보드 열기 — 없으면(첫 판 전) 로그 폴더를 연다
+    /// 분석 열람 창 오픈 — 전적·리포트·타임라인 전부 앱 안에서 (외부 앱 불필요)
     private func openHistory() {
-        let dir = FileManager.default
-            .urls(for: .libraryDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("Logs/SCCoach", isDirectory: true)
-        let history = dir.appendingPathComponent("history.md")
-        if FileManager.default.fileExists(atPath: history.path) {
-            NSWorkspace.shared.open(history)
-        } else {
-            NSWorkspace.shared.open(dir)
-        }
+        openWindow(id: "reports")
     }
 
     private var statusText: String {

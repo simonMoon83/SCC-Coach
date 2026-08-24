@@ -303,6 +303,29 @@ final class ReplayReportTests: XCTestCase {
         XCTAssertFalse(html.contains("</script></script>"))
     }
 
+    func testMarkdownLiteRendersOurConstructs() {
+        let md = """
+        # 제목
+        ## 섹션
+        - **굵게** 항목 [링크](a.analysis.html)
+
+        | 날짜 | 결과 |
+        |---|---|
+        | 08-23 | 승 |
+        """
+        let html = MarkdownLite.html(from: md)
+        XCTAssertTrue(html.contains("<h1>제목</h1>"))
+        XCTAssertTrue(html.contains("<h2>섹션</h2>"))
+        XCTAssertTrue(html.contains("<b>굵게</b>"))
+        XCTAssertTrue(html.contains("<a href=\"a.analysis.html\">링크</a>"))
+        XCTAssertTrue(html.contains("<th>날짜</th>"))
+        XCTAssertTrue(html.contains("<td>승</td>"))
+        XCTAssertFalse(html.contains("|---|"), "표 구분선은 렌더 제외")
+        // 이스케이프 — 본문 <script>는 무해화
+        XCTAssertTrue(MarkdownLite.html(from: "<script>x</script>")
+            .contains("&lt;script&gt;"))
+    }
+
     // MARK: - HistoryIndex
 
     func testHistoryRowAndTrendMarkdown() throws {
