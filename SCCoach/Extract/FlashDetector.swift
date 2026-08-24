@@ -63,10 +63,24 @@ public struct FlashDetector {
             events.removeAll()   // 스테일 diff — 재기준만 잡고 판정 없음
             return []
         }
-
         // 이번 프레임의 토글 셀 → 연결 클러스터 → 대면적만 이벤트로
         var toggled = [Int](repeating: 0, count: g * g)
-        for i in 0..<(g * g) where grid[i] != prev[i] { toggled[i] = 1 }
+        var toggledCount = 0
+        for i in 0..<(g * g) where grid[i] != prev[i] {
+            toggled[i] = 1
+            toggledCount += 1
+        }
+        // 팔레트 전환 가드 (사용자 실플레이: 시프트+탭 고정↔개별 색 전환 잦음).
+        // 판별자는 총량이 아니라 **토글 비율** — 피격 깜빡임도 총량은 크게 흔들지만
+        // (꺼짐 국면엔 유닛이 마스크에서 사라짐 — 실측) 공격받지 않는 유닛·건물은
+        // 안정적으로 남는다. 전환은 화면의 전 유닛 색이 동시에 바뀜: 토글이
+        // 가시 셀의 80%↑ && 40셀↑ 이면 전역 전환 — 이력 리셋(연타 재발 오발 차단)
+        let visible = max(prev.lazy.filter { $0 }.count,
+                          grid.lazy.filter { $0 }.count)
+        if toggledCount >= 40, toggledCount * 10 >= visible * 8 {
+            events.removeAll()
+            return []
+        }
         let clusters = Clustering.clusters(mask: toggled, width: g, height: g,
                                            key: 1, minPixels: clusterSizeThreshold)
         events.removeAll { t - $0.t > windowSeconds }

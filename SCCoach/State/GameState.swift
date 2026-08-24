@@ -11,6 +11,11 @@ public struct SupplySample: Equatable {
     public init(t: TimeInterval, used: Int) { self.t = t; self.used = used }
 }
 
+public struct ObservedColor: Equatable {
+    public let r: Int, g: Int, b: Int
+    public init(r: Int, g: Int, b: Int) { self.r = r; self.g = g; self.b = b }
+}
+
 public struct AlertLogEntry: Equatable {
     public let t: TimeInterval          // 스트림 시간 (§4.7 배정표)
     public let ruleID: String
@@ -71,6 +76,9 @@ public struct GameState {
     public var allySeenFrames = 0                 // 동맹 색 픽셀 ≥12인 프레임 누적 수
     /// 인게임 종족 아이콘 관측 (랜덤 종족 확정 — 사용자 요구). 로비 종족이 우선
     public var myObservedRace: Race?
+    /// 내 색 인게임 관측 — 게임 시작 3초 창, 내 본진 주변 최다 채도색.
+    /// 개별 색 모드(시프트+탭)에서도 내 유닛 인식이 살아남게 (사용자 실플레이 반영)
+    public var myObservedColor: ObservedColor?
 
     // 결정 상태 — apply(_:)/resetInGame()으로만 변경 (불변규칙 4)
     public var spawnCandidates: [SpawnCandidate] = []
@@ -142,6 +150,7 @@ public struct GameState {
         myBase = nil
         allySeenFrames = 0
         myObservedRace = nil
+        myObservedColor = nil
         alertLog.removeAll()
         clock = GameClock()
     }

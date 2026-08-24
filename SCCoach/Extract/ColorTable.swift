@@ -20,7 +20,8 @@ public struct ColorTable: Equatable {
 
     public private(set) var references: [Reference]
 
-    public init(observedPlayers: [ObservedPlayer] = []) {
+    public init(observedPlayers: [ObservedPlayer] = [],
+                myColor: ObservedColor? = nil) {
         // 게임 간 편차 실측: 내 초록 (48,240,0~24) [Polypoid·Hunters] ↔ (0,240,48) [실전
         // 스크린샷] — 중심 (24,240,24)·임계 48로 양쪽 흡수. 적 빨강 (216,0,0) ↔ (192,0,24)
         // — 임계 44. 동맹 노랑 실측 (240,240,72)·임계 44. 미네랄 시안(0,216,240)과는
@@ -31,6 +32,13 @@ public struct ColorTable: Equatable {
             .init(key: 2, r: 240, g: 240, b: 64, faction: .ally, threshold: 44),
         ]
         var key = 3
+        // 내 색 인게임 관측 (개별 색 모드 대응 — 사용자 실플레이: 시프트+탭 전환 잦음).
+        // 고정 초록과 병행 매칭 — 어느 팔레트에서도 '나'가 잡힌다
+        if let mine = myColor {
+            refs.append(.init(key: key, r: mine.r, g: mine.g, b: mine.b,
+                              faction: .mine, threshold: 34))
+            key += 1
+        }
         for p in observedPlayers {
             // 동맹창 순색 — 미니맵 도트는 이 색 그대로 찍힌다 (마젠타 실측 일치)
             refs.append(.init(key: key, r: p.red, g: p.green, b: p.blue,

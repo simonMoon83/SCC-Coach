@@ -23,7 +23,8 @@ public final class MinimapReader: Extractor {
     public func process(_ frame: Frame, regions: Regions, into state: inout GameState) {
         let rect = regions.minimap
         guard !rect.isEmpty else { return }
-        let table = ColorTable(observedPlayers: state.observedPlayers)
+        let table = ColorTable(observedPlayers: state.observedPlayers,
+                               myColor: state.myObservedColor)
 
         guard let scan = Self.scanPixels(buffer: frame.pixelBuffer, rect: rect,
                                          table: table) else { return }
@@ -107,6 +108,57 @@ public final class MinimapReader: Extractor {
            let vp = state.viewportRect {
             state.myBase = CGPoint(x: vp.midX, y: vp.midY)
         }
+
+        // 내 색 인게임 관측 (사용자 실플레이: 시프트+탭으로 고정↔개별 색 전환 잦음)
+        // — 게임 시작 3초 창, 내 본진 반경의 최다 채도색을 내 색으로 채택.
+        // 고정 팔레트면 초록이 관측돼 기존 기준과 중복(무해), 개별 색이면 실색 확보
+        if state.myObservedColor == nil,
+           state.inGameEntryFrom == .lobby,
+           let start = state.clock.inGameStart,
+           frame.timestamp - start <= 3.0,
+           let base = state.myBase {
+            state.myObservedColor = Self.dominantColor(
+                buffer: frame.pixelBuffer, rect: rect, around: base, radius: 0.10)
+        }
+
+    }
+
+    /// 본진 반경 내 최다 채도색 (16-양자화 히스토그램 최빈값). 뷰포트 흰색·
+    /// 저채도(지형)는 제외. 표본 30픽셀 미만이면 nil (미확정 유지)
+    static func dominantColor(buffer: CVPixelBuffer, rect: CGRect,
+                              around center: CGPoint,
+                              radius: Double) -> ObservedColor? {
+        CVPixelBufferLockBaseAddress(buffer, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
+        guard let base = CVPixelBufferGetBaseAddress(buffer) else { return nil }
+        let bpr = CVPixelBufferGetBytesPerRow(buffer)
+        let bw = CVPixelBufferGetWidth(buffer)
+        let bh = CVPixelBufferGetHeight(buffer)
+        let ptr = base.assumingMemoryBound(to: UInt8.self)
+        let cx = rect.minX + center.x * rect.width
+        let cy = rect.minY + center.y * rect.height
+        let rr = radius * Double(min(rect.width, rect.height))
+        var hist: [Int: Int] = [:]
+        var sums: [Int: (r: Int, g: Int, b: Int)] = [:]
+        let x0 = max(0, Int(cx - rr)), x1 = min(bw, Int(cx + rr))
+        let y0 = max(0, Int(cy - rr)), y1 = min(bh, Int(cy + rr))
+        guard x0 < x1, y0 < y1 else { return nil }
+        for y in y0..<y1 {
+            for x in x0..<x1 {
+                let i = y * bpr + x * 4
+                let r = Int(ptr[i + 2]), g = Int(ptr[i + 1]), b = Int(ptr[i])
+                let mx = max(r, g, b), mn = min(r, g, b)
+                guard mx - mn > 80, mx > 120 else { continue }       // 채도색만
+                if r > 200 && g > 200 && b > 200 { continue }        // 뷰포트 흰색
+                let key = (r / 16) << 8 | (g / 16) << 4 | (b / 16)
+                hist[key, default: 0] += 1
+                let s = sums[key] ?? (0, 0, 0)
+                sums[key] = (s.r + r, s.g + g, s.b + b)
+            }
+        }
+        guard let (key, count) = hist.max(by: { $0.value < $1.value }),
+              count >= 30, let sum = sums[key] else { return nil }
+        return ObservedColor(r: sum.r / count, g: sum.g / count, b: sum.b / count)
     }
 
     // MARK: - 픽셀 스캔 (단일 패스)

@@ -115,6 +115,47 @@ final class MinimapTests: XCTestCase {
             .reduce(0) { $0 + $1.pixels }, 10, "마젠타 적 도트 검출 (실측 ~113px)")
     }
 
+    func testMyColorObservedNearBaseAndFeedsTable() throws {
+        // 개별 색 대응 (사용자 실플레이): 본진 주변 최다 채도색 = 내 색.
+        // 헌터스 고정 팔레트 픽스처에서는 초록이 관측돼야 한다 (D-3: 고정≈실색)
+        let frame = try FixtureSource.loadFrame(
+            url: Self.fixturesURL.appendingPathComponent("minimap/palette_fixed_t109.png"),
+            timestamp: 0)
+        var state = GameState()
+        state.clock.markInGameStart(atStream: 0)
+        state.inGameEntryFrom = .lobby
+        let regions = try minimapRegions(for: frame.size)
+        MinimapReader().process(frame, regions: regions, into: &state)
+        let color = try XCTUnwrap(state.myObservedColor, "3초 창 내 색 관측")
+        XCTAssertGreaterThan(color.g, 150, "고정 팔레트 — 초록 계열")
+        XCTAssertLessThan(color.r, 120)
+        // 관측 색이 테이블의 mine 기준으로 들어간다
+        let table = SCCoachKit.ColorTable(myColor: color)
+        XCTAssertTrue(table.references.contains {
+            $0.faction == .mine && $0.r == color.r && $0.threshold == 34
+        })
+    }
+
+    func testFlashGuardIgnoresPaletteSwitch() {
+        // 시프트+탭 전환 = 마스크 총량 전역 급변 — 피격으로 오인하면 안 된다
+        var detector = FlashDetector()
+        let g = detector.gridSize
+        func mask(_ cells: Int) -> [Bool] {
+            var m = [Bool](repeating: false, count: g * g)
+            for i in 0..<cells { m[(10 + i / 12) * g + 10 + i % 12] = true }
+            return m
+        }
+        _ = detector.observe(alertMask: mask(8), width: g, height: g, atStream: 0)
+        // 전환: 8셀 → 90셀 급증 (개별 색으로 내 유닛 전체 등장)
+        var sites = detector.observe(alertMask: mask(90), width: g, height: g,
+                                     atStream: 0.1)
+        XCTAssertTrue(sites.isEmpty, "전환 프레임 — 판정 폐기")
+        // 연타로 다시 8셀 급감 — 역시 폐기 (재발 조건 미충족이어야)
+        sites = detector.observe(alertMask: mask(8), width: g, height: g,
+                                 atStream: 0.2)
+        XCTAssertTrue(sites.isEmpty, "역전환 프레임 — 재발 오발 차단")
+    }
+
     // MARK: - FlashDetector (실픽스처 시퀀스)
 
     func flashSequence(_ dir: String) throws -> [Frame] {
@@ -199,17 +240,21 @@ final class MinimapTests: XCTestCase {
             for (x, y) in cells { m[y * g + x] = true }
             return m
         }
-        // 프레임0: 빈 화면 (기준)
-        _ = detector.observe(alertMask: mask([]), width: g, height: g, atStream: 0)
+        // 안정 배경(비피격 유닛·건물 — 실제 프레임에 상존, 전환 가드의 전제)
+        var stable: [(Int, Int)] = []
+        for i in 0..<30 { stable.append((44 + i % 6, 44 + i / 6)) }
+        // 프레임0: 배경만 (기준)
+        _ = detector.observe(alertMask: mask(stable), width: g, height: g, atStream: 0)
         // 프레임1: 20셀 블록 2개가 4셀 간격으로 동시 등장 (거대 동시 토글)
-        var cells: [(Int, Int)] = []
+        var cells: [(Int, Int)] = stable
         for i in 0..<20 { cells.append((10 + i % 5, 10 + i / 5)) }
         for i in 0..<20 { cells.append((10 + i % 5, 18 + i / 5)) }
         let sites = detector.observe(alertMask: mask(cells), width: g, height: g,
                                      atStream: 0.033)
         XCTAssertTrue(sites.isEmpty, "첫 등장 — 이전 프레임 재발 없이는 무보고")
-        // 프레임2: 소멸, 프레임3: 같은 자리 재등장 → 이제 재발 성립
-        _ = detector.observe(alertMask: mask([]), width: g, height: g, atStream: 0.066)
+        // 프레임2: 소멸(배경 유지), 프레임3: 같은 자리 재등장 → 이제 재발 성립
+        _ = detector.observe(alertMask: mask(stable), width: g, height: g,
+                             atStream: 0.066)
         let sites2 = detector.observe(alertMask: mask(cells), width: g, height: g,
                                       atStream: 0.1)
         XCTAssertFalse(sites2.isEmpty, "같은 자리 재발 — 보고")
