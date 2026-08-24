@@ -57,6 +57,42 @@ final class AttentionAndAirTests: XCTestCase {
         XCTAssertEqual(s.minerals, 63, "점프 2회 정합 — 재앵커")
     }
 
+    // MARK: - RaceBadgeReader (랜덤 종족 인게임 확정 — 실픽스처)
+
+    func testRaceBadgeClassifiesProtossAndTerran() throws {
+        // P: rec1 인게임 픽스처 (1750×1242, 정확 좌표)
+        let (pFrame, pRegions) = try loadT060(t: 0)
+        XCTAssertEqual(RaceBadgeReader.classify(
+            buffer: pFrame.pixelBuffer, supplyRect: pRegions.supply), .protoss)
+        // T: rec2 헌터스 픽스처 (1914×1274, 앵커 유도 좌표)
+        let tFrame = try FixtureSource.loadFrame(
+            url: Self.fixturesURL.appendingPathComponent("race_terran_t100.png"),
+            timestamp: 0)
+        let reference = try RegionStore.load(
+            from: Self.fixturesURL.appendingPathComponent("regions-1750x1242.json"))
+        let tRegions = reference.derivedByAnchors(for: tFrame.size)
+        XCTAssertEqual(RaceBadgeReader.classify(
+            buffer: tFrame.pixelBuffer, supplyRect: tRegions.supply), .terran)
+        // 아이콘 없는 화면(로비) — nil
+        let lobby = try FixtureSource.loadFrame(
+            url: Self.fixturesURL.appendingPathComponent("phase/lobby_t002.png"),
+            timestamp: 0)
+        XCTAssertNil(RaceBadgeReader.classify(
+            buffer: lobby.pixelBuffer, supplyRect: pRegions.supply))
+    }
+
+    func testSupplyPhraseUsesObservedRaceForRandom() {
+        var s = GameState()
+        s.slots = [PlayerSlot(label: "나", controller: "나", race: .random,
+                              isComputer: false, isMe: true)]
+        XCTAssertEqual(SupplyBlockRule.effectiveRace(s), nil, "랜덤 + 미관측 = 미상")
+        s.myObservedRace = .zerg
+        XCTAssertEqual(SupplyBlockRule.effectiveRace(s), .zerg, "관측이 랜덤을 확정")
+        s.slots = [PlayerSlot(label: "나", controller: "나", race: .terran,
+                              isComputer: false, isMe: true)]
+        XCTAssertEqual(SupplyBlockRule.effectiveRace(s), .terran, "로비 확정 종족 우선")
+    }
+
     // MARK: - 주의력 지표
 
     func makeAttentionState(minerals: Int, riseFrom: Int,

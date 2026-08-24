@@ -208,7 +208,11 @@ final class ReplayReportTests: XCTestCase {
        {"Frame":4762,"PlayerID":1,"Type":{"Name":"Targeted Order","ID":97},
         "Pos":{"X":819,"Y":3277},"Order":{"Name":"AttackMove","ID":14}},
        {"Frame":4762,"PlayerID":2,"Type":{"Name":"Right Click","ID":96},
-        "Pos":{"X":819,"Y":3277}}]},
+        "Pos":{"X":819,"Y":3277}},
+       {"Frame":4000,"PlayerID":0,"Type":{"Name":"Build","ID":12},
+        "Pos":{"X":20,"Y":100},"Unit":{"Name":"Nexus","ID":154}},
+       {"Frame":3000,"PlayerID":1,"Type":{"Name":"Build","ID":12},
+        "Pos":{"X":100,"Y":20},"Unit":{"Name":"Command Center","ID":106}}]},
      "Computed":{"WinnerTeam":0,"PlayerDescs":[
        {"PlayerID":0,"APM":100,"EAPM":90,"CmdCount":10,
         "StartLocation":{"X":819,"Y":3277}}]}}
@@ -224,7 +228,8 @@ final class ReplayReportTests: XCTestCase {
         XCTAssertEqual(report.opponentTimelines.map(\.name), ["Foe"],
                        "동맹(같은 팀)은 상대 복기에서 제외")
         let condensed = ReplayReport.condensed(report.opponentTimelines[0].events)
-        XCTAssertEqual(condensed.map(\.name), ["Barracks", "Marine"],
+        XCTAssertEqual(condensed.map(\.name),
+                       ["Barracks", "Marine", "Command Center"],
                        "일꾼 제외·유닛은 종류별 첫 생산만")
     }
 
@@ -324,6 +329,53 @@ final class ReplayReportTests: XCTestCase {
         // 이스케이프 — 본문 <script>는 무해화
         XCTAssertTrue(MarkdownLite.html(from: "<script>x</script>")
             .contains("&lt;script&gt;"))
+    }
+
+    func testTimingComparisonFirstExpansion() throws {
+        let report = ReplayReport(output: try humanGame(), playerName: "Me")
+        let rows = PostGameAnalyzer.timingComparison(report)
+        let expansion = try XCTUnwrap(rows.first { $0.0 == "첫 확장" })
+        // 나 Nexus 4000f=168s, 상대 CC 3000f=126s — 42초 늦음
+        XCTAssertEqual(try XCTUnwrap(expansion.1), 168, accuracy: 1)
+        XCTAssertEqual(try XCTUnwrap(expansion.2), 126, accuracy: 1)
+    }
+
+    func testZoneLabelerExpansions() {
+        let base = CGPoint(x: 0.2, y: 0.8)
+        let expansions = [
+            CGPoint(x: 0.22, y: 0.78),   // 본진 자원 군집 — 제외돼야
+            CGPoint(x: 0.34, y: 0.68),   // 앞마당 (본진에서 0.18)
+            CGPoint(x: 0.45, y: 0.80),   // 삼룡이 (0.25)
+            CGPoint(x: 0.80, y: 0.20),   // 원거리 — 제외
+        ]
+        XCTAssertEqual(ZoneLabeler.label(
+            for: CGPoint(x: 0.35, y: 0.67), myBase: base,
+            expansions: expansions), "앞마당")
+        XCTAssertEqual(ZoneLabeler.label(
+            for: CGPoint(x: 0.46, y: 0.79), myBase: base,
+            expansions: expansions), "삼룡이")
+        XCTAssertEqual(ZoneLabeler.label(
+            for: CGPoint(x: 0.21, y: 0.79), myBase: base,
+            expansions: expansions), "본진", "본진 반경이 확장보다 우선")
+        XCTAssertEqual(ZoneLabeler.label(
+            for: CGPoint(x: 0.80, y: 0.21), myBase: base,
+            expansions: expansions), "2시", "원거리 군집은 시계 방위 유지")
+    }
+
+    func testHistoryTrendExcludesDodges() throws {
+        let out = try humanGame()
+        let real = HistoryIndex.row(for: PostGameAnalyzer().analyze(
+            records: [], output: out, playerName: "Me"))
+        // 30초 닷지 행 흉내 — durationSeconds만 다르게
+        let dodge = HistoryIndex.GameRow(
+            date: real.date, map: real.map, matchup: real.matchup,
+            result: .win, durationSeconds: 30, apm: 300, eapm: 300,
+            supplyAlerts: 0, tipResponded: 0, tipTotal: 0,
+            tipMedianDelay: nil, flashSuspects: 0)
+        let md = HistoryIndex.markdown(rows: [real, dodge])
+        XCTAssertTrue(md.contains("1분 미만 1판은 추세·승률에서 제외"))
+        // 유효판(real)은 likelyLoss — 닷지 승이 승률에 안 섞이면 승률 0/1
+        XCTAssertTrue(md.contains("승률 0/1"), md.prefix(200).description)
     }
 
     // MARK: - HistoryIndex

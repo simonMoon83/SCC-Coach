@@ -28,6 +28,7 @@ final class AppCoordinator: ObservableObject {
     @Published private(set) var phase: Phase = .idle
     @Published private(set) var statusLine: String = "—"
     @Published private(set) var lastAlert: String = "—"
+    @Published private(set) var lastGameBrief: String?
     @Published private(set) var transitionLog: [String] = []
 
     private let logger = Logger(subsystem: "SCCoach", category: "phase")
@@ -215,6 +216,7 @@ final class AppCoordinator: ObservableObject {
                 self.appendLog("            \(line)")
                 self.logger.info("\(line, privacy: .public)")
             }
+            if let brief = result.brief { self.lastGameBrief = brief }
         }
     }
 

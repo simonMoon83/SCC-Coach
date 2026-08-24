@@ -20,6 +20,12 @@ public struct SupplyBlockRule: Rule {
         [neutralPhrase, "서플 지어", "파일런 지어", "오버로드 뽑아"]
     }
 
+    /// 로비 종족 우선, 미상·랜덤이면 인게임 아이콘 관측 (사용자 요구: 랜덤 확정)
+    static func effectiveRace(_ s: GameState) -> Race? {
+        if let lobby = s.mySlot?.race, lobby != .random { return lobby }
+        return s.myObservedRace
+    }
+
     static func phrase(for race: Race?) -> String {
         switch race {
         case .terran: return "서플 지어"
@@ -39,7 +45,7 @@ public struct SupplyBlockRule: Rule {
         guard remaining / rate < Self.horizonSeconds else { return nil }
         return Verdict(alert: Alert(
             ruleID: id,
-            phrase: Self.phrase(for: s.mySlot?.race),
+            phrase: Self.phrase(for: Self.effectiveRace(s)),
             priority: .warn,
             refire: .cooldown(Self.cooldownSeconds),
             location: nil))            // B-2 결정: location=nil → 이어콘·링 없이 음성만(pan 0)

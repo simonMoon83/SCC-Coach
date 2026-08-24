@@ -69,6 +69,8 @@ public struct GameState {
     public var viewportValidAt: TimeInterval?     // 뷰포트 형태 검증 성공 시각 (스트림)
     public var myBase: CGPoint?
     public var allySeenFrames = 0                 // 동맹 색 픽셀 ≥12인 프레임 누적 수
+    /// 인게임 종족 아이콘 관측 (랜덤 종족 확정 — 사용자 요구). 로비 종족이 우선
+    public var myObservedRace: Race?
 
     // 결정 상태 — apply(_:)/resetInGame()으로만 변경 (불변규칙 4)
     public var spawnCandidates: [SpawnCandidate] = []
@@ -139,6 +141,7 @@ public struct GameState {
         viewportValidAt = nil
         myBase = nil
         allySeenFrames = 0
+        myObservedRace = nil
         alertLog.removeAll()
         clock = GameClock()
     }

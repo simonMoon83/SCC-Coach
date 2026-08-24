@@ -56,6 +56,15 @@ struct StatusView: View {
                     }
                 Spacer()
             }
+            if let brief = coordinator.lastGameBrief {
+                HStack {
+                    Text("지난 판:").font(.caption)
+                    Text(brief)
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(.cyan)
+                    Spacer()
+                }
+            }
             HStack {
                 Text("최근 알림:").font(.caption)
                 Text(coordinator.lastAlert)

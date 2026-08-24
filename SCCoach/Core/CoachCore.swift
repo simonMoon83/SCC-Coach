@@ -52,7 +52,8 @@ public final class CoachCore {
         // §4.6 순서: (PhaseDetector) → ClockReader → Supply·ResourceReader
         //           → MinimapReader → AllianceReader → LobbyReader·MapPreviewReader
         self.extractors = [ClockReader(), SupplyExtractor(), ResourceReader(),
-                           MinimapReader(), AllianceReader(), lobbyReader,
+                           RaceBadgeReader(), MinimapReader(), AllianceReader(),
+                           lobbyReader,
                            MapPreviewReader(store: mapStore)]
         self.engine = RuleEngine(rules: rules)
     }

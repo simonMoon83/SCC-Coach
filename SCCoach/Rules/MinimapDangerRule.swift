@@ -33,7 +33,8 @@ public struct MinimapFlashRule: Rule {
                     && hypot($0.center.x - location.x, $0.center.y - location.y)
                         <= Self.enemyGateRadius
             }) else { continue }   // 적 근접 게이트
-            let label = ZoneLabeler.label(for: location, myBase: s.myBase)
+            let label = ZoneLabeler.label(for: location, myBase: s.myBase,
+                                          expansions: s.mapProfile?.expansions ?? [])
             let phrase = "\(label) \(suffix)"
             // 쿨다운 중 문장은 건너뛴다 — 첫 후보 고정 반환이면 두 번째 피격 지점이
             // 영영 미보고(기아 — 리뷰 확정). 다음 후보가 다음 틱에 순차 발화(§8)
@@ -68,7 +69,8 @@ public struct MinimapDangerRule: Rule {
             }?.pixels ?? 0
             guard pixels >= 3 else { continue }
             if let vp = s.viewportRect, vp.contains(point) { continue }   // 뷰포트 억제
-            let label = ZoneLabeler.label(for: point, myBase: s.myBase)
+            let label = ZoneLabeler.label(for: point, myBase: s.myBase,
+                                          expansions: s.mapProfile?.expansions ?? [])
             let phrase = "\(label)에 적"
             // 쿨다운 중 문장 건너뛰기 — 다른 존의 두 번째 부대가 보고되게 (기아 방지)
             if s.recentlyDelivered(ruleID: id, phrase: phrase, within: 10) { continue }

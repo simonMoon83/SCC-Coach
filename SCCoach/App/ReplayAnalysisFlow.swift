@@ -8,6 +8,7 @@ enum ReplayAnalysisFlow {
     struct Result {
         let summaryLines: [String]     // 상태 창 로그용
         let markdownPath: String?
+        let brief: String?             // 지난 판 한 줄 요약 (로비 브리핑용)
     }
 
     static func run(records: [CoachCore.AlertRecord],
@@ -15,12 +16,12 @@ enum ReplayAnalysisFlow {
                     gameStart: Date?) async -> Result {
         guard let binary = ScrepRunner.locateBinary() else {
             return Result(summaryLines: ["리플레이 분석 생략 — screp 바이너리 없음"],
-                          markdownPath: nil)
+                          markdownPath: nil, brief: nil)
         }
         guard let replayURL = await ReplayWatcher()
             .waitForNewReplay(newerThan: gameStart) else {
             return Result(summaryLines: ["리플레이 분석 생략 — 60초 내 새 .rep 미발견"],
-                          markdownPath: nil)
+                          markdownPath: nil, brief: nil)
         }
         // 서브프로세스·JSON 파싱은 유틸리티 QoS로 (메인·파이프라인 액터 비점유)
         let task = Task.detached(priority: .utility) { () -> Result in
@@ -44,10 +45,20 @@ enum ReplayAnalysisFlow {
                     lines.append("전적 갱신: \(dir.appendingPathComponent("history.md").path)")
                 }
                 HistoryIndex.cleanupOldSessionLogs(in: dir)
-                return Result(summaryLines: lines, markdownPath: paths.md)
+                // 지난 판 브리핑 — 로비 상태 창 한 줄 (§13 원칙 2: UI 전용 허용)
+                var brief = "지난 판(\(report.replay.mapName)): "
+                brief += report.replay.myResult?.label ?? "결과 미상"
+                let tips = report.tipDelays
+                if !tips.isEmpty {
+                    let answered = tips.filter { $0.delaySeconds != nil }.count
+                    brief += " · 팁 응답 \(answered)/\(tips.count)"
+                }
+                if !suspects.isEmpty { brief += " · 오탐 의심 \(suspects.count)건" }
+                return Result(summaryLines: lines, markdownPath: paths.md,
+                              brief: brief)
             } catch {
                 return Result(summaryLines: ["리플레이 분석 실패 — \(error)"],
-                              markdownPath: nil)
+                              markdownPath: nil, brief: nil)
             }
         }
         return await task.value

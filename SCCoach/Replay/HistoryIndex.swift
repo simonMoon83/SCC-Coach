@@ -48,11 +48,15 @@ public enum HistoryIndex {
 
     public static func markdown(rows: [GameRow]) -> String {
         var md = "# SCCoach 전적 (\(rows.count)판)\n\n"
-        // 추세: 최근 5판 vs 그 이전 — 판이 6판 미만이면 전체 요약만
-        let recent = Array(rows.suffix(5))
-        md += trendLine(label: rows.count >= 6 ? "최근 5판" : "전체", rows: recent)
-        if rows.count >= 6 {
-            md += trendLine(label: "이전", rows: Array(rows.dropLast(5)))
+        // 추세는 1분 이상 유효판만 — 닷지·순삭이 승률을 부풀리는 오염 차단 (C10)
+        let valid = rows.filter { $0.durationSeconds >= 60 }
+        let recent = Array(valid.suffix(5))
+        md += trendLine(label: valid.count >= 6 ? "최근 5판" : "전체", rows: recent)
+        if valid.count >= 6 {
+            md += trendLine(label: "이전", rows: Array(valid.dropLast(5)))
+        }
+        if valid.count < rows.count {
+            md += "- 1분 미만 \(rows.count - valid.count)판은 추세·승률에서 제외\n"
         }
         md += "\n| 날짜 | 맵 | 매치업 | 결과 | 길이 | APM/유효 | 인구알림 | 팁응답 | 반응중앙값 | 오탐의심 |\n"
         md += "|---|---|---|---|---|---|---|---|---|---|\n"

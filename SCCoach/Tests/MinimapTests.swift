@@ -62,7 +62,7 @@ final class MinimapTests: XCTestCase {
                                          myBase: base), "본진")
         XCTAssertEqual(ZoneLabeler.label(for: CGPoint(x: 0.95, y: 0.5),
                                          myBase: base), "3시")
-        XCTAssertEqual(ZoneLabeler.allLabels.count, 13)
+        XCTAssertEqual(ZoneLabeler.allLabels.count, 15)   // + 앞마당·삼룡이
     }
 
     // MARK: - MinimapReader (실픽스처)

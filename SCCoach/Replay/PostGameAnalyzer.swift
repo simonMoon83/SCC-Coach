@@ -225,6 +225,12 @@ public struct PostGameAnalyzer {
             return hypot(point.x - base.x, point.y - base.y)
                 <= ZoneLabeler.homeRadius + 0.10
         }
+        if alertZone == "앞마당" || alertZone == "삼룡이" {
+            // 확장 좌표는 리플레이에서 재현 불가 — 본진 경고 반경 정합으로 느슨히
+            guard let base = myBase else { return false }
+            return hypot(point.x - base.x, point.y - base.y)
+                <= ZoneLabeler.alertRadius + 0.05
+        }
         guard alertZone.hasSuffix("시"),
               let hour = Int(alertZone.dropLast()) else { return false }
         let h = ZoneLabeler.clockHour(for: point)
@@ -278,6 +284,24 @@ public struct PostGameAnalyzer {
             md += "\n## 상대 빌드 — \(opponent.name) (\(opponent.race))\n\n"
             md += timeline(opponent.events)
         }
+        // 타이밍 비교 (C3) — 1:1 사람 상대일 때: 첫 확장 + 양쪽 공통 건물·테크 Δ
+        let comparison = Self.timingComparison(report.replay)
+        if !comparison.isEmpty {
+            md += "\n## 타이밍 비교 (나 vs 상대)\n\n"
+            md += "| 항목 | 나 | 상대 | Δ |\n|---|---|---|---|\n"
+            func mmss(_ t: Double?) -> String {
+                guard let t else { return "—" }
+                return "\(Int(t) / 60):\(String(format: "%02d", Int(t) % 60))"
+            }
+            for (name, mine, theirs) in comparison {
+                let delta: String
+                if let m = mine, let o = theirs {
+                    delta = String(format: "%+.0f초", m - o)
+                        + (m <= o ? " 빠름" : " 늦음")
+                } else { delta = "—" }
+                md += "| \(name) | \(mmss(mine)) | \(mmss(theirs)) | \(delta) |\n"
+            }
+        }
         if !report.replay.chat.isEmpty {
             md += "\n## 채팅\n\n"
             for line in report.replay.chat {
@@ -321,6 +345,42 @@ public struct PostGameAnalyzer {
             for note in report.notes { md += "- \(note)\n" }
         }
         return md
+    }
+
+    /// 타이밍 비교 (C3): 첫 확장 + 양쪽에 공통으로 등장하는 건물·테크의 첫 시각.
+    /// 상대가 1명(사람)일 때만 — 다수 상대는 비교축이 애매해 생략
+    static let expansionNames: Set<String> = ["Nexus", "Hatchery", "Command Center"]
+
+    static func timingComparison(_ replay: ReplayReport)
+        -> [(String, Double?, Double?)] {
+        guard replay.opponentTimelines.count == 1,
+              let opponent = replay.opponentTimelines.first,
+              !replay.myBuildTimeline.isEmpty else { return [] }
+        func firsts(_ events: [ReplayReport.BuildEvent]) -> [String: Double] {
+            var out: [String: Double] = [:]
+            for e in events where e.kind != "Train" && e.kind != "Unit Morph" {
+                if out[e.name] == nil { out[e.name] = e.seconds }
+            }
+            return out
+        }
+        let mine = firsts(replay.myBuildTimeline)
+        let theirs = firsts(opponent.events)
+        var rows: [(String, Double?, Double?)] = []
+        // 첫 확장 — 종족이 달라 이름이 달라도 비교 가능하게 별도 행
+        let myExp = replay.myBuildTimeline
+            .first { expansionNames.contains($0.name) }?.seconds
+        let oppExp = opponent.events
+            .first { expansionNames.contains($0.name) }?.seconds
+        if myExp != nil || oppExp != nil {
+            rows.append(("첫 확장", myExp, oppExp))
+        }
+        let common = Set(mine.keys).intersection(theirs.keys)
+            .subtracting(expansionNames)
+        for name in common.sorted(by: { (mine[$0] ?? 0) < (mine[$1] ?? 0) })
+            .prefix(6) {
+            rows.append((name, mine[name], theirs[name]))
+        }
+        return rows
     }
 
     /// 세션 JSONL(AlertRecord 라인) 파싱 — 오프라인 재분석용

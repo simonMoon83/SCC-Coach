@@ -38,7 +38,7 @@ public struct ScoutContactRule: Rule {
                 .reduce(0) { $0 + $1.pixels }
             guard minePixelsNear >= 1, minePixelsNear <= Self.lonePixelLimit
             else { continue }
-            let phrase = "\(ZoneLabeler.label(for: p, myBase: base))에 적"
+            let phrase = "\(ZoneLabeler.label(for: p, myBase: base, expansions: s.mapProfile?.expansions ?? []))에 적"
             if s.recentlyDelivered(ruleID: id, phrase: phrase,
                                    within: Self.cooldown) { continue }
             if s.recentlyDelivered(ruleID: "minimap.enemy", phrase: phrase,
