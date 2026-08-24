@@ -86,8 +86,20 @@ public struct ScrepOutput: Decodable {
     public struct Computed: Decodable {
         public let winnerTeam: Int?     // 휴리스틱 — 확정 아님 (§13)
         public let playerDescs: [PlayerDesc]?
+        public let chatCmds: [ChatCmd]?
         enum CodingKeys: String, CodingKey {
             case winnerTeam = "WinnerTeam", playerDescs = "PlayerDescs"
+            case chatCmds = "ChatCmds"
+        }
+    }
+
+    /// 채팅 — 승패 정황(gg 타이밍)·매너 확인용 (실측: 이긴 판의 "ㅈㅈ"가 판정과 정합)
+    public struct ChatCmd: Decodable {
+        public let frame: Int
+        public let playerID: Int
+        public let message: String
+        enum CodingKeys: String, CodingKey {
+            case frame = "Frame", playerID = "PlayerID", message = "Message"
         }
     }
 

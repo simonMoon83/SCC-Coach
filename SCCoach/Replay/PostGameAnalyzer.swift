@@ -253,6 +253,7 @@ public struct PostGameAnalyzer {
         let d = Int(report.replay.durationSeconds)
         md += "게임 길이 \(d / 60):\(String(format: "%02d", d % 60))"
         md += " · \(report.replay.gameType)"
+        if let result = report.replay.myResult { md += " · **\(result.label)**" }
         if let start = report.replay.startTime { md += " · \(start)" }
         md += "\n\n## 플레이어\n\n"
         for p in report.replay.players {
@@ -276,6 +277,14 @@ public struct PostGameAnalyzer {
         where !opponent.events.isEmpty {
             md += "\n## 상대 빌드 — \(opponent.name) (\(opponent.race))\n\n"
             md += timeline(opponent.events)
+        }
+        if !report.replay.chat.isEmpty {
+            md += "\n## 채팅\n\n"
+            for line in report.replay.chat {
+                let t = Int(line.seconds)
+                md += "- \(t / 60):\(String(format: "%02d", t % 60))"
+                md += " \(line.name): \(line.message)\n"
+            }
         }
         md += "\n## 알림 (\(report.stats.delivered)건 발화, \(report.stats.dropped)건 폐기)\n\n"
         for (rule, n) in report.stats.byRule.sorted(by: { $0.key < $1.key }) {

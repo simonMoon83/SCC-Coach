@@ -66,11 +66,16 @@ enum ReplayAnalysisFlow {
         let base = "\(formatter.string(from: Date()))-\(slug.isEmpty ? "game" : slug)"
         let jsonURL = dir.appendingPathComponent("\(base).analysis.json")
         let mdURL = dir.appendingPathComponent("\(base).analysis.md")
+        let htmlURL = dir.appendingPathComponent("\(base).analysis.html")
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         try encoder.encode(report).write(to: jsonURL)
-        try PostGameAnalyzer.markdown(for: report)
-            .data(using: .utf8)!.write(to: mdURL)
+        // 인터랙티브 타임라인 + md 상단에 링크
+        try TimelineHTML.render(report: report)
+            .data(using: .utf8)!.write(to: htmlURL)
+        let md = "[🕐 인터랙티브 타임라인](\(base).analysis.html)\n\n"
+            + PostGameAnalyzer.markdown(for: report)
+        try md.data(using: .utf8)!.write(to: mdURL)
         return (jsonURL.path, mdURL.path)
     }
 }

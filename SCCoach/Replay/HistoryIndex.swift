@@ -10,6 +10,7 @@ public enum HistoryIndex {
         public let date: String            // "08-23 23:35" (리플레이 StartTime)
         public let map: String
         public let matchup: String         // "Z vs P" / "T vs Z·P(컴)"
+        public let result: ReplayReport.GameResult?
         public let durationSeconds: Double
         public let apm: Int?
         public let supplyAlerts: Int
@@ -32,6 +33,7 @@ public enum HistoryIndex {
             date: shortDate(report.replay.startTime),
             map: report.replay.mapName,
             matchup: "\(raceLetter(me?.race ?? "?")) vs \(opp)",
+            result: report.replay.myResult,
             durationSeconds: report.replay.durationSeconds,
             apm: me?.apm,
             supplyAlerts: report.stats.byRule["supply.block"] ?? 0,
@@ -50,11 +52,12 @@ public enum HistoryIndex {
         if rows.count >= 6 {
             md += trendLine(label: "이전", rows: Array(rows.dropLast(5)))
         }
-        md += "\n| 날짜 | 맵 | 매치업 | 길이 | APM | 인구알림 | 팁응답 | 반응중앙값 | 오탐의심 |\n"
-        md += "|---|---|---|---|---|---|---|---|---|\n"
+        md += "\n| 날짜 | 맵 | 매치업 | 결과 | 길이 | APM | 인구알림 | 팁응답 | 반응중앙값 | 오탐의심 |\n"
+        md += "|---|---|---|---|---|---|---|---|---|---|\n"
         for r in rows.reversed() {   // 최신이 위
             let d = Int(r.durationSeconds)
             md += "| \(r.date) | \(r.map) | \(r.matchup)"
+            md += " | \(r.result?.short ?? "—")"
             md += " | \(d / 60):\(String(format: "%02d", d % 60))"
             md += " | \(r.apm.map(String.init) ?? "—")"
             md += " | \(r.supplyAlerts)"
@@ -69,7 +72,14 @@ public enum HistoryIndex {
         let totalTips = rows.reduce(0) { $0 + $1.tipTotal }
         let responded = rows.reduce(0) { $0 + $1.tipResponded }
         let medians = rows.compactMap(\.tipMedianDelay)
-        var line = "- **\(label)**: 팁 응답 \(responded)/\(totalTips)"
+        var line = "- **\(label)**: "
+        // 승률 — 판정 가능한 판만 (패? = 약한 추정도 패로 계상, §13 확정 아님)
+        let decided = rows.compactMap(\.result)
+        if !decided.isEmpty {
+            let wins = decided.filter { $0 == .win }.count
+            line += "승률 \(wins)/\(decided.count) · "
+        }
+        line += "팁 응답 \(responded)/\(totalTips)"
         if totalTips > 0 {
             line += String(format: " (%.0f%%)", Double(responded) / Double(totalTips) * 100)
         }

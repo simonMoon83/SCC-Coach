@@ -265,6 +265,44 @@ final class ReplayReportTests: XCTestCase {
         XCTAssertEqual(quiet.flashChecks.first?.verdict, .indeterminate)
     }
 
+    func testGameResultDerivation() throws {
+        // WinnerTeam=0 + 대인전 → 이탈 기록 없이 종료 = 저장자(나) 선이탈 → 약한 패 추정
+        let base = try humanGame()
+        XCTAssertEqual(ReplayReport(output: base, playerName: "Me").myResult,
+                       .likelyLoss)
+        // WinnerTeam = 내 팀 → 승리(추정) / 상대 팀 → 패배(추정)
+        func withWinner(_ team: Int) throws -> ScrepOutput {
+            try JSONDecoder().decode(ScrepOutput.self, from: Data(
+                Self.humanGameJSON.replacingOccurrences(
+                    of: "\"WinnerTeam\":0", with: "\"WinnerTeam\":\(team)").utf8))
+        }
+        XCTAssertEqual(ReplayReport(output: try withWinner(1),
+                                    playerName: "Me").myResult, .win)
+        XCTAssertEqual(ReplayReport(output: try withWinner(2),
+                                    playerName: "Me").myResult, .loss)
+        // 대컴퓨터전 미상(파괴 종료 구분 불가) — hunters: 사람 1명, WinnerTeam 0
+        let vsAI = try parsed("hunters_game.rep")
+        XCTAssertNil(ReplayReport(output: vsAI, playerName: nil).myResult)
+    }
+
+    func testTimelineHTMLRendersLanesAndEvents() throws {
+        let out = try humanGame()
+        let report = PostGameAnalyzer().analyze(
+            records: [record(200, "minimap.flash", "본진 피격")],
+            output: out, playerName: "Me")
+        let html = TimelineHTML.render(report: report)
+        XCTAssertTrue(html.contains("SCCoach 타임라인"))
+        XCTAssertTrue(html.contains("Foe"), "상대(적) 표시")
+        XCTAssertFalse(html.contains("Pal"), "동맹은 상대 타임라인에 없어야")
+        XCTAssertTrue(html.contains("Barracks"), "빌드 이벤트 포함")
+        XCTAssertTrue(html.contains("본진 피격"), "알림 배지 포함")
+        XCTAssertTrue(html.contains("보조 건물 표시"), "minor 토글")
+        XCTAssertTrue(html.contains("\"perMinute\""), "활동량 곡선 데이터")
+        XCTAssertFalse(html.contains("__DATA__"), "페이로드 주입 완료")
+        // 채팅에 </script>가 들어와도 스크립트가 깨지지 않아야 (\/ 이스케이프)
+        XCTAssertFalse(html.contains("</script></script>"))
+    }
+
     // MARK: - HistoryIndex
 
     func testHistoryRowAndTrendMarkdown() throws {

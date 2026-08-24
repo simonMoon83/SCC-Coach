@@ -28,14 +28,53 @@ public struct ReplayReport: Codable, Equatable {
         public let events: [BuildEvent]
     }
 
+    /// 승패 판정 — .rep에 승패는 명시 저장되지 않는다(§13). 전부 추정:
+    /// win/loss = screp 잔류 휴리스틱, likelyLoss = 이탈 기록 없이 녹화 종료
+    /// (저장자=나 → 내가 먼저 나감 — 대인전에선 사실상 패. 실측: 이긴 판은
+    /// 상대 이탈이 기록돼 win으로 나옴 — Pole Star 검증)
+    public enum GameResult: String, Codable {
+        case win, loss, likelyLoss
+
+        public var label: String {
+            switch self {
+            case .win: return "승리(추정)"
+            case .loss: return "패배(추정)"
+            case .likelyLoss: return "패배 추정(내 이탈로 기록 종료)"
+            }
+        }
+        public var short: String {
+            switch self {
+            case .win: return "승"
+            case .loss: return "패"
+            case .likelyLoss: return "패?"
+            }
+        }
+    }
+
     public let mapName: String
     public let durationSeconds: Double
     public let gameType: String
     public let startTime: String?
     public let players: [PlayerSummary]
     public let winnerTeam: Int?        // screp 휴리스틱 — **확정 아님** (§13 명기)
+    public let myResult: GameResult?   // nil = 판정 불가 (컴퓨터전 파괴 종료 등)
+    public struct ChatLine: Codable, Equatable {
+        public let seconds: Double
+        public let name: String
+        public let message: String
+    }
+
+    /// 분당 커맨드 수 — 타임라인 배경 활동량 바 ("손이 멈춘 구간"이 보인다)
+    public struct ActivityCurve: Codable, Equatable {
+        public let name: String
+        public let isMe: Bool
+        public let perMinute: [Int]
+    }
+
     public let myBuildTimeline: [BuildEvent]
     public let opponentTimelines: [OpponentTimeline]
+    public let chat: [ChatLine]
+    public let activity: [ActivityCurve]?   // 구버전 json 호환 위해 옵셔널
 
     public var me: PlayerSummary? { players.first(where: \.isMe) }
 
@@ -48,6 +87,17 @@ public struct ReplayReport: Codable, Equatable {
 
         let myPlayerID = Self.matchMe(players: output.header.players,
                                       playerName: playerName)
+        let myTeamForResult = output.header.players
+            .first { $0.id == myPlayerID && $0.isHuman }?.team
+        let humanCount = output.header.players.filter(\.isHuman).count
+        if let team = myTeamForResult, let winner = winnerTeam {
+            myResult = team == winner ? .win : .loss
+        } else if myTeamForResult != nil, humanCount >= 2,
+                  (output.computed?.winnerTeam ?? 0) == 0 {
+            myResult = .likelyLoss   // 대인전 + 이탈 기록 없이 종료 = 저장자(나) 선이탈
+        } else {
+            myResult = nil
+        }
         let descByID = Dictionary(
             grouping: output.computed?.playerDescs ?? [], by: \.playerID)
 
@@ -65,6 +115,25 @@ public struct ReplayReport: Codable, Equatable {
             myBuildTimeline = Self.buildTimeline(output: output, playerID: myPlayerID)
         } else {
             myBuildTimeline = []
+        }
+        let nameByID = Dictionary(
+            output.header.players.filter(\.isHuman).map { ($0.id, $0.name) },
+            uniquingKeysWith: { first, _ in first })
+        chat = (output.computed?.chatCmds ?? []).map {
+            ChatLine(seconds: output.seconds(ofFrame: $0.frame),
+                     name: nameByID[$0.playerID] ?? "P\($0.playerID)",
+                     message: $0.message)
+        }
+        // 분당 활동량 (사람 전원)
+        let minutes = max(1, Int(output.durationSeconds / 60) + 1)
+        activity = output.header.players.filter(\.isHuman).map { p in
+            var counts = [Int](repeating: 0, count: minutes)
+            for cmd in output.commands?.cmds ?? [] where cmd.playerID == p.id {
+                let m = Int(output.seconds(ofFrame: cmd.frame)) / 60
+                if m < minutes { counts[m] += 1 }
+            }
+            return ActivityCurve(name: p.name, isMe: p.id == myPlayerID,
+                                 perMinute: counts)
         }
         // 상대 빌드 복기 — 사람이고 나 아니고 다른 팀
         let myTeam = output.header.players
