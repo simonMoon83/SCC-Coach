@@ -1,0 +1,15 @@
+# 대용량 녹화 원본 — 픽스처는 여기서 잘라낸 PNG만 커밋한다
+*.mov
+*.mp4
+
+# Swift / Xcode
+.build/
+.swiftpm/
+xcuserdata/
+DerivedData/
+
+# macOS
+.DS_Store
+
+# Claude Code 런타임 파일
+.claude/

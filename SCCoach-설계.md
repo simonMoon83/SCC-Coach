@@ -540,7 +540,7 @@ struct SupplyGate {
 
 ClockReader도 같은 원리를 쓴다(§4.7의 `observe` 게이트). 폐기·보류값은 `supplyHistory`에 들어가지 않아 `supplyGrowthRate` 오염이 차단된다.
 
-**ResourceReader** — 미네랄 카운터에 같은 파이프라인(크롭 → 확대 → 이진화 → OCR → 게이트)을 적용한다. 주기 0.5s, `Regions.resources` 영역. `macro.float`(§8)의 원천 — 미네랄이 쌓인다 = 생산이 멈췄다.
+**ResourceReader** — 미네랄 카운터에 같은 파이프라인(크롭 → 확대 → 이진화 → OCR → 게이트)을 적용한다. 주기 **2.0s(v1 확정 — OCR 예산)**, `Regions.resources` 영역(5자리 대응 폭 180px — 실측). 게이트는 SupplyGate 축소판: 첫 채택·±300 초과 점프는 2회 연속 정합 요구(단발 오독·대량 지출 복구 — 리뷰 확정). `macro.float`(§8)의 원천 — 미네랄이 쌓인다 = 생산이 멈췄다.
 
 ### 6.2 MinimapReader
 
@@ -584,7 +584,8 @@ struct Track {
 
     /// 지형은 저장 프로퍼티가 아니라 인자로 받는다 — Track은 순수 값 유지, 주입 경로 문제 소멸.
     /// AirUnitRule이 state.mapProfile을 넘겨 호출한다.
-    func isAir(on map: MapProfile?, clockRate: Double) -> Bool
+    func isAirborne(profile: MapProfile, now: TimeInterval,
+                    window: TimeInterval = 1.5) -> Bool   // 2026-08-24 확정: 시간 창(스팬≥1s·표본≥5·이동≥0.03·불가 비율≥0.7) — 개수 다수결은 상관 표본에 무력(리뷰)
     // 1순위: map 있음 && history 중 !isWalkable 지점 존재 → true
     // 2순위: straightness > 0.95 && 게임시간 환산 속도(clockRate) > groundThreshold
     // map == nil이면 2순위만 사용
@@ -618,7 +619,7 @@ struct Track {
 9. **팔레트 왕복 대응**: 통일(고정)↔해제(플레이어 색)를 게임 중 몇 번을 오가도 된다. 분류 자산을 색이 아니라 **위치**(`myBase`·`allyBases` — 기지는 움직이지 않는다)에 앵커하기 때문: `.fixed`에서 노랑 클러스터로 `allyBases`를 확보해 두면, `.playerColors`로 풀리는 순간 그 위치의 클러스터 색 = 동맹 색으로 재학습(`allyColorIDs`), `myBase` 위치 클러스터 색 = `myColorID` 재확인. 게임을 고정 팔레트로 시작해 3게임초 분류 창을 놓친 경우도 같은 경로로 복구된다. `allyObserved`/`mode`는 관측 누적이라 팔레트 전환에 불변
 10. **한계**: 공유 시야가 없는 커스텀 팀전은 동맹이 늦게 나타나 적으로 오분류될 수 있다 → 수동 동맹 지정 UI(§11)로 보정. 로비 팀 표기 파싱은 레이아웃 편차가 커 보조 수단으로만 검토
 
-`myColorID == nil`이면 색 의존 규칙(`minimap.enemy`·`minimap.air`·scout 계열)은 evaluate에서 nil 반환으로 자기 비활성 — 오발보다 축소 동작.
+`myColorID == nil`이면 색 의존 규칙(`minimap.enemy`·`air.approach`·scout 계열)은 evaluate에서 nil 반환으로 자기 비활성 — 오발보다 축소 동작.
 
 ### 6.5 PhaseDetector — 전이 감지·리셋 계약·게이팅
 
@@ -716,8 +717,8 @@ struct MapProfile: Codable {
 | `supply.block` | warn | `(max-used)/rate < 20초` (게이트 통과값 기준) | `cooldown(25)` |
 | `minimap.flash` | urgent | FlashDetector 토글 클러스터 — 클러스터별 발화 (§6.2) | `cooldownPerPhrase(5)` |
 | `minimap.enemy` | warn | 내·아군 존 안 적(§6.4 판정) 클러스터 `pixels>=3 && framesHeld>=3` | `cooldownPerPhrase(10)` |
-| `minimap.air` | warn | `track.isAir && 내·아군 영역 진입` — 아군이면 "{시}시 아군 드랍 조심" | `cooldownPerPhrase(10)` |
-| `macro.float` | tip | 미네랄 ≥ 500 && 최근 30게임초 순증 ≥ 200 — "유닛 뽑아" (초기값, 튜닝 대상) | `cooldown(30)`, **교전 중 전용 이어콘만** (`earconOnlyInCombat`) |
+| `air.approach` | urgent | `track.isAirborne(profile:) && 내 경고 존 진입` — "공중 유닛 온다" (**중립 문구 확정** — 도트로 셔틀/커세어/베슬 구분 불가, 사용자 결정 2026-08-24) | `cooldown(20)` |
+| `macro.float` | warn | `attentionLapseScore() ≥ 0.7` — 미네랄 성분 0.6(절대량 500~1000·30게임초 순증 250~550) + 카메라 무동작 0.4(5~12초, 뷰포트 검증 신선도·일시정지 재개 게이트) — "미네랄 뜬다" (**2026-08-24 확정** — 사용자 요구 "미네랄+동작 감지 주의력 지표") | `cooldown(45)`, **교전 중 침묵** (v1 — 이어콘은 2차) |
 | `build.step` | tip | 확정 supply가 스텝 트리거 이상 — `supplyHistory` 마지막 2개 엔트리 모두 충족 시 | `oncePerKey("build.step.n")`, `onDelivery: [.advanceBuildStep(atGame:)]` |
 | `scout.timer` | tip | 게임시간 도달 && `!scoutStarted` && 활성 플랜에 정찰 스텝 없음(§8 하단) | `oncePerGame` |
 | `scout.narrowed` | tip | 잔존 후보 1개 | `oncePerKey("scout.narrowed.i")` |
@@ -816,7 +817,7 @@ struct MapProfile: Codable {
 **완료 기준**: 로비에서 선택한 플랜의 인구 트리거로 팁이 나오고, 교전 중에는 억제되며, 미선택 게임(팀전 기본)에서는 침묵.
 
 ### 8단계 — 공중/지상 분류
-`Tracker`, `isAir(on:clockRate:)` 지형 연동(§6.3), `AirUnitRule`.
+`Tracker`, `isAirborne(profile:now:)` 지형 연동(§6.3), `AirUnitRule`.
 **완료 기준**: 드랍 착지 시 지상 병력과 구분해 알림.
 
 ### 9단계 — 사후 리플레이 분석

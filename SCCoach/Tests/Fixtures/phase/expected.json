@@ -1,0 +1,10 @@
+{
+  "_note": "전이 시퀀스: lobby(0~9s) → inGame(≈10s, supply 시그니처) → 나가기 대화상자(915s, supply 계속 보임 — 잠정 ended 미발동이 정답) → 전환 일러스트(916s, supply 소실 시작) → 점수 화면(918s, '패배!'). 이 게임은 메뉴 나가기 종료라 중앙 승패 밴드가 없음 — ended(확정) 시그니처 보강 검토 대상(PREPARATION.md §5).",
+  "cases": [
+    { "file": "lobby_t002.png",          "phase": "lobby",  "note": "커스텀 슬롯 로비. 슬롯: 아현장(컴퓨터·저그), 예꾸(다크호스·프로토스). 맵 Polypoid 128x128" },
+    { "file": "ingame_t060.png",         "phase": "inGame", "note": "supply 8/9 매치" },
+    { "file": "dialog_leave_t915.png",   "phase": "inGame", "note": "임무 나가기 대화상자 열림 — supply 64/165 그대로 보임. 잠정 ended 트리거 안 됨" },
+    { "file": "transition_art_t916.png", "phase": "ended(잠정 경로)", "note": "전면 일러스트 — inGame 시그니처 소실 시작" },
+    { "file": "score_defeat_t918.png",   "phase": "ended",  "note": "점수 화면 '패배!' + '소요 시간: 15:12'. ended(확정) 보조 시그니처 후보" }
+  ]
+}

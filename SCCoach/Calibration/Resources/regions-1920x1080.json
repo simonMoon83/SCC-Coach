@@ -1,0 +1,11 @@
+{
+  "_status": "0단계 실측 전 — referenceSize만 확정. 전 영역 rect는 실측 스크린샷으로 기입할 것 (§12.2). 좌표는 캡처 버퍼 픽셀 기준(§12.1: 버퍼 픽셀 == 창 포인트).",
+  "referenceSize": { "width": 1920, "height": 1080 },
+  "supply":     { "x": 0, "y": 0, "width": 0, "height": 0 },
+  "resources":  { "x": 0, "y": 0, "width": 0, "height": 0 },
+  "clock":      { "x": 0, "y": 0, "width": 0, "height": 0 },
+  "minimap":    { "x": 0, "y": 0, "width": 0, "height": 0 },
+  "lobbySlots": { "x": 0, "y": 0, "width": 0, "height": 0 },
+  "center":     { "x": 0, "y": 0, "width": 0, "height": 0 },
+  "replayBar":  { "x": 0, "y": 0, "width": 0, "height": 0 }
+}

@@ -1,0 +1,21 @@
+{
+  "_note": "정답값은 2회 독립 판독(본선 + 검증 에이전트) 교차 확인. t=900은 6배 확대 재판독으로 확정. regions는 ../regions-1750x1242.json.",
+  "cases": [
+    { "file": "t020.png", "used": 5,   "max": 9,   "note": "한 자리, 초반" },
+    { "file": "t060.png", "used": 8,   "max": 9 },
+    { "file": "t080.png", "used": 9,   "max": 9,   "note": "인구 막힘 + '사이오닉 에너지 부족' 메시지 시점대" },
+    { "file": "t150.png", "used": 12,  "max": 17 },
+    { "file": "t220.png", "used": 17,  "max": 25 },
+    { "file": "t300.png", "used": 27,  "max": 34 },
+    { "file": "t360.png", "used": 42,  "max": 50,  "note": "배경에 미네랄 크리스털 겹침 — 저대비 케이스" },
+    { "file": "t450.png", "used": 57,  "max": 58,  "note": "막힘 직전(잔여 1)" },
+    { "file": "t520.png", "used": 70,  "max": 74 },
+    { "file": "t600.png", "used": 93,  "max": 115, "note": "세 자리 max" },
+    { "file": "t660.png", "used": 103, "max": 131, "note": "세 자리/세 자리, 밝은 흙 배경 저대비" },
+    { "file": "t740.png", "used": 102, "max": 147, "note": "교전 중" },
+    { "file": "t800.png", "used": 72,  "max": 138, "note": "건물 스프라이트가 숫자에 겹침 — 최난도" },
+    { "file": "t850.png", "used": 56,  "max": 147, "note": "교전 손실로 used 급감" },
+    { "file": "t880.png", "used": 68,  "max": 156 },
+    { "file": "t903.png", "used": 58,  "max": 165, "note": "파일런 완성으로 max 증가 직후. (t=900은 유닛 글로우가 둘째 자릿수를 가려 사람도 정답 확정 불가 — 인접 프레임 57→54 사이 — 라 픽스처에서 제외. 이런 단발 오독은 SupplyGate(§6.1) 소관)" }
+  ]
+}
