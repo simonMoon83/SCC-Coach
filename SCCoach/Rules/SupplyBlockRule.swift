@@ -1,6 +1,6 @@
 import Foundation
 
-// §8 — supply.block: (max−used)/rate < 20초 (게이트 통과값 기준), warn, cooldown(25).
+// §8 — supply.block: (max−used)/rate < horizon초 (게이트 통과값 기준), warn, cooldown(25).
 //
 // B-6 결정: rate ≤ 0(성장 정지·이력 소진)이면 침묵 — "막힘 예측"과 "막힘 지속 경고"는
 // 별개 문제(시뮬레이션 C 6:25 분석)이며 지속 경고는 실사용 판단 후 별도 조건으로 추가.
@@ -11,7 +11,9 @@ public struct SupplyBlockRule: Rule {
     public let id = "supply.block"
 
     static let neutralPhrase = "인구 막힌다"
-    static let horizonSeconds = 20.0
+    /// 실사용 개인화 튜닝 (2026-08-24): 사용자 반응 중앙값 23~39초 실측 —
+    /// 20초 예고로는 알림이 반응 속도보다 늦다. 반응 여유를 포함해 35초로
+    static let horizonSeconds = 35.0
     static let rateWindow = 30.0
     static let cooldownSeconds = 25.0
 
