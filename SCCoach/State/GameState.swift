@@ -79,6 +79,9 @@ public struct GameState {
     /// 내 색 인게임 관측 — 게임 시작 3초 창, 내 본진 주변 최다 채도색.
     /// 개별 색 모드(시프트+탭)에서도 내 유닛 인식이 살아남게 (사용자 실플레이 반영)
     public var myObservedColor: ObservedColor?
+    /// 미지 색 추론 (§6.4-5): 시작 10초 내 등장 = 동맹, 이후 = 적 (개별 색 다인전)
+    public var inferredAllyColors: [ObservedColor] = []
+    public var inferredEnemyColors: [ObservedColor] = []
 
     // 결정 상태 — apply(_:)/resetInGame()으로만 변경 (불변규칙 4)
     public var spawnCandidates: [SpawnCandidate] = []
@@ -151,6 +154,8 @@ public struct GameState {
         allySeenFrames = 0
         myObservedRace = nil
         myObservedColor = nil
+        inferredAllyColors = []
+        inferredEnemyColors = []
         alertLog.removeAll()
         clock = GameClock()
     }

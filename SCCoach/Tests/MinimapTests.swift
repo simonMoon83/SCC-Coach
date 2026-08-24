@@ -93,26 +93,40 @@ final class MinimapTests: XCTestCase {
         XCTAssertNotNil(state.myBase, "전이 3초 내 뷰포트 중심 = myBase")
     }
 
-    func testPlayerPaletteNeedsObservedColorsForEnemies() throws {
-        // 플레이어 색 모드 — 동맹창 관측 없으면 적 미검출(축소 동작),
-        // 마젠타(베나티르) 관측 주입 시 적 blip 검출 (t=299 실측: 마젠타 도트 존재)
+    func testPlayerPaletteInfersUnknownColors() throws {
+        // 개별 색 모드 — v2(실전 확정: 빨무 적 3명 미검출): 미지 색을 추론한다.
+        // 시작 10초 내 등장 = 동맹 추정, 이후 등장 = 적 추정 (§6.4-5)
         let frame = try FixtureSource.loadFrame(
             url: Self.fixturesURL.appendingPathComponent("minimap/palette_player_t299.png"),
-            timestamp: 0)
+            timestamp: 60)                       // 중반 프레임 — 미지 색 = 적
         let regions = try minimapRegions(for: frame.size)
 
-        var blind = GameState()
-        MinimapReader().process(frame, regions: regions, into: &blind)
-        XCTAssertEqual(blind.blips.filter { $0.faction == .enemy }
-            .reduce(0) { $0 + $1.pixels }, 0, "관측 색 없음 — 적 침묵 (오발보다 축소)")
+        var late = GameState()
+        late.clock.markInGameStart(atStream: 0)
+        MinimapReader().process(frame, regions: regions, into: &late)
+        XCTAssertGreaterThan(late.blips.filter { $0.faction == .enemy }
+            .reduce(0) { $0 + $1.pixels }, 10, "미지 마젠타 → 적 추론 검출")
+        XCTAssertFalse(late.inferredEnemyColors.isEmpty)
 
+        // 같은 프레임이 시작 직후(10초 내)라면 동맹 추정 — 적 아님
+        let earlyFrame = try FixtureSource.loadFrame(
+            url: Self.fixturesURL.appendingPathComponent("minimap/palette_player_t299.png"),
+            timestamp: 3)
+        var early = GameState()
+        early.clock.markInGameStart(atStream: 0)
+        MinimapReader().process(earlyFrame, regions: regions, into: &early)
+        XCTAssertEqual(early.inferredEnemyColors.count, 0)
+        XCTAssertFalse(early.inferredAllyColors.isEmpty, "시작 창 미지 색 = 동맹 추정")
+
+        // 동맹창 관측이 있으면 그 진영 판정이 우선 (관측 마젠타 = 적)
         var informed = GameState()
+        informed.clock.markInGameStart(atStream: 0)
         informed.observedPlayers = [ObservedPlayer(
             name: "베나티르 부족", red: 216, green: 24, blue: 216,
             isAlly: false, sharedVision: false)]
         MinimapReader().process(frame, regions: regions, into: &informed)
         XCTAssertGreaterThan(informed.blips.filter { $0.faction == .enemy }
-            .reduce(0) { $0 + $1.pixels }, 10, "마젠타 적 도트 검출 (실측 ~113px)")
+            .reduce(0) { $0 + $1.pixels }, 10, "관측 색 경로 유지 (실측 ~113px)")
     }
 
     func testMyColorObservedNearBaseAndFeedsTable() throws {

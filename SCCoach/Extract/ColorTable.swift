@@ -21,7 +21,9 @@ public struct ColorTable: Equatable {
     public private(set) var references: [Reference]
 
     public init(observedPlayers: [ObservedPlayer] = [],
-                myColor: ObservedColor? = nil) {
+                myColor: ObservedColor? = nil,
+                inferredAllies: [ObservedColor] = [],
+                inferredEnemies: [ObservedColor] = []) {
         // 게임 간 편차 실측: 내 초록 (48,240,0~24) [Polypoid·Hunters] ↔ (0,240,48) [실전
         // 스크린샷] — 중심 (24,240,24)·임계 48로 양쪽 흡수. 적 빨강 (216,0,0) ↔ (192,0,24)
         // — 임계 44. 동맹 노랑 실측 (240,240,72)·임계 44. 미네랄 시안(0,216,240)과는
@@ -43,6 +45,18 @@ public struct ColorTable: Equatable {
             // 동맹창 순색 — 미니맵 도트는 이 색 그대로 찍힌다 (마젠타 실측 일치)
             refs.append(.init(key: key, r: p.red, g: p.green, b: p.blue,
                               faction: p.isAlly ? .ally : .enemy, threshold: 34))
+            key += 1
+        }
+        // 미지 색 추론 (§6.4-5): 시작 10초 내 = 동맹, 이후 등장 = 적 — 개별 색
+        // 다인전 대응 (실전 확정: 빨무 적 3명 미검출). 동맹창 관측이 항상 우선
+        for c in inferredAllies {
+            refs.append(.init(key: key, r: c.r, g: c.g, b: c.b,
+                              faction: .ally, threshold: 34))
+            key += 1
+        }
+        for c in inferredEnemies {
+            refs.append(.init(key: key, r: c.r, g: c.g, b: c.b,
+                              faction: .enemy, threshold: 34))
             key += 1
         }
         references = refs

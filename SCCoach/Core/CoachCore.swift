@@ -135,6 +135,17 @@ public final class CoachCore {
 
     private func applyTransition(_ tr: PhaseDetector.Transition) -> [CoreOutput] {
         var outputs: [CoreOutput] = []
+        // 게임 이탈 = 종료 (실전 확정: 점수 화면을 빠르게 클릭 통과하면 확정 승격이
+        // 못 따라와 7판 전부 분석 미발동 — 2026-08-24). 60초+ 진행된 게임에서
+        // 로비·idle로 나가면 종료로 간주해 분석 트리거를 살린다. 리셋 전에 판정
+        // (clock이 살아있을 때). 잠정 ended 경유든 직행이든 커버.
+        if tr.to == .lobby || tr.to == .idle,
+           !endedConfirmedEmitted,
+           let start = state.clock.inGameStart,
+           state.streamNow - start >= 60 {
+            endedConfirmedEmitted = true
+            outputs.append(.gameEndedConfirmed)
+        }
         switch tr.to {
         case .lobby:
             // any → lobby: 전체 리셋 + 로비 스코프 초기화 (§6.5 — 플랜은 판마다 새로)

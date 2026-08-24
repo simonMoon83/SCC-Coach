@@ -23,11 +23,48 @@ public final class MinimapReader: Extractor {
     public func process(_ frame: Frame, regions: Regions, into state: inout GameState) {
         let rect = regions.minimap
         guard !rect.isEmpty else { return }
-        let table = ColorTable(observedPlayers: state.observedPlayers,
-                               myColor: state.myObservedColor)
+        var table = ColorTable(observedPlayers: state.observedPlayers,
+                               myColor: state.myObservedColor,
+                               inferredAllies: state.inferredAllyColors,
+                               inferredEnemies: state.inferredEnemyColors)
 
-        guard let scan = Self.scanPixels(buffer: frame.pixelBuffer, rect: rect,
+        guard var scan = Self.scanPixels(buffer: frame.pixelBuffer, rect: rect,
                                          table: table) else { return }
+
+        // 미지 색 추론 (§6.4-5 주 경로 — 실전 확정: 빨무 5인 개별 색에서 적 3명
+        // 전원 미검출·적 알림 0건). 게임 시작 10초 내 등장 미지 색 = 동맹 추정
+        // (공유 시야로 시작부터 보임 — 실측), 이후 새로 등장 = 적 추정.
+        // 표본 12픽셀↑·기존 기준과 거리 40↑·진영당 최대 6색.
+        if let start = state.clock.inGameStart {
+            let early = frame.timestamp - start <= 10.0
+            var adopted = false
+            for stat in scan.unknownColors.values.sorted(by: { $0.count > $1.count })
+            where stat.count >= 12 {
+                let color = ObservedColor(r: stat.r / stat.count,
+                                          g: stat.g / stat.count,
+                                          b: stat.b / stat.count)
+                guard !Self.isNearKnown(color, state: state, table: table)
+                else { continue }
+                if early {
+                    guard state.inferredAllyColors.count < 6 else { continue }
+                    state.inferredAllyColors.append(color)
+                } else {
+                    guard state.inferredEnemyColors.count < 6 else { continue }
+                    state.inferredEnemyColors.append(color)
+                }
+                adopted = true
+            }
+            if adopted {   // 이번 프레임부터 반영 — 새 기준으로 재스캔
+                table = ColorTable(observedPlayers: state.observedPlayers,
+                                   myColor: state.myObservedColor,
+                                   inferredAllies: state.inferredAllyColors,
+                                   inferredEnemies: state.inferredEnemyColors)
+                guard let rescan = Self.scanPixels(buffer: frame.pixelBuffer,
+                                                   rect: rect, table: table)
+                else { return }
+                scan = rescan
+            }
+        }
         let w = scan.width, h = scan.height
 
         // Blip: 기준색 키별 8-이웃 클러스터
@@ -123,6 +160,16 @@ public final class MinimapReader: Extractor {
 
     }
 
+    /// 이미 아는 색(고정 3·내 색·동맹창·기추론)과 가까우면 새 추론 후보에서 제외
+    static func isNearKnown(_ c: ObservedColor, state: GameState,
+                            table: ColorTable) -> Bool {
+        for ref in table.references {
+            let d = abs(ref.r - c.r) + abs(ref.g - c.g) + abs(ref.b - c.b)
+            if d < 90 { return true }
+        }
+        return false
+    }
+
     /// 본진 반경 내 최다 채도색 (16-양자화 히스토그램 최빈값). 뷰포트 흰색·
     /// 저채도(지형)는 제외. 표본 30픽셀 미만이면 nil (미확정 유지)
     static func dominantColor(buffer: CVPixelBuffer, rect: CGRect,
@@ -170,6 +217,13 @@ public final class MinimapReader: Extractor {
         let allyMask: [Bool]
         let whiteCount: Int
         let whiteMinX: Int, whiteMaxX: Int, whiteMinY: Int, whiteMaxY: Int
+        /// 미지 채도색 (어느 기준색에도 불매칭·비시안) — 16양자 키 → (표본수, RGB합)
+        let unknownColors: [Int: UnknownColorStat]
+    }
+
+    struct UnknownColorStat {
+        var count = 0
+        var r = 0, g = 0, b = 0
     }
 
     static func scanPixels(buffer: CVPixelBuffer, rect: CGRect,
@@ -191,6 +245,7 @@ public final class MinimapReader: Extractor {
         var allyMask = [Bool](repeating: false, count: w * h)
         var whiteCount = 0
         var wMinX = Int.max, wMaxX = -1, wMinY = Int.max, wMaxY = -1
+        var unknown: [Int: UnknownColorStat] = [:]
 
         for y in 0..<h {
             let rowBase = (y0 + y) * bytesPerRow
@@ -213,12 +268,20 @@ public final class MinimapReader: Extractor {
                     colorMask[idx] = ref.key
                     if ref.faction == .mine { mineMask[idx] = true }
                     if ref.faction == .ally { allyMask[idx] = true }
+                } else if !(r < 120 && g > 180 && b > 180) {   // 시안(미네랄) 제외
+                    // 미지 채도색 수집 — 개별 색 다인전 대응 (§6.4-5)
+                    let key = (r / 16) << 8 | (g / 16) << 4 | (b / 16)
+                    var stat = unknown[key] ?? UnknownColorStat()
+                    stat.count += 1
+                    stat.r += r; stat.g += g; stat.b += b
+                    unknown[key] = stat
                 }
             }
         }
         return ScanResult(width: w, height: h, colorMask: colorMask, mineMask: mineMask,
                           allyMask: allyMask,
                           whiteCount: whiteCount, whiteMinX: wMinX, whiteMaxX: wMaxX,
-                          whiteMinY: wMinY, whiteMaxY: wMaxY)
+                          whiteMinY: wMinY, whiteMaxY: wMaxY,
+                          unknownColors: unknown)
     }
 }
