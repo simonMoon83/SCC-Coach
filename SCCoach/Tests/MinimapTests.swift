@@ -393,6 +393,27 @@ final class MinimapTests: XCTestCase {
         XCTAssertNil(MinimapDangerRule().evaluate(s))
     }
 
+    func testNearestThreatWinsTheGlobalSlot() {
+        // 2026-08-25 실전 확정: 전역 간격으로 발화 슬롯이 8초당 1개 — 배열 순서가
+        // 아니라 본진 근접순으로 슬롯을 배정해야 "본진에 적"이 원거리에 안 밀린다
+        var s = GameState()
+        s.phase = .inGame
+        s.streamNow = 100
+        s.myBase = CGPoint(x: 0.5, y: 0.5)
+        func standing(_ p: CGPoint) -> Track {
+            Track(colorKey: 0, faction: .enemy, history: [
+                TrackPoint(t: 99.9, p: p), TrackPoint(t: 100, p: p),
+                TrackPoint(t: 100.03, p: p)])
+        }
+        let far = CGPoint(x: 0.78, y: 0.5)        // "3시" (존 안 원거리)
+        let home = CGPoint(x: 0.52, y: 0.52)      // "본진"
+        s.blips = [Blip(center: far, pixels: 6, colorKey: 0, faction: .enemy),
+                   Blip(center: home, pixels: 6, colorKey: 0, faction: .enemy)]
+        s.tracks = [standing(far), standing(home)]   // 원거리가 배열 앞
+        XCTAssertEqual(MinimapDangerRule().evaluate(s)?.alert?.phrase, "본진에 적",
+                       "근접 위협이 슬롯 선점")
+    }
+
     func testSecondZoneReportedWhileFirstInCooldown() {
         // 기아 방지 (리뷰 확정): 첫 존이 쿨다운이어도 두 번째 존이 보고된다
         var s = GameState()

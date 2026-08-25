@@ -22,7 +22,14 @@ public struct MinimapFlashRule: Rule {
         // 동맹 피격은 팀전에서만 — 개인전엔 동맹이 없다. 실측(2026-08-24 실세션):
         // Olive(120,120,0) 적 컴퓨터의 고휘도 토글이 동맹 노랑 기준에 걸려
         // 개인전에서 "아군 피격" 15건 오발 — 이 게이트가 그 오탐 계열 전체를 봉인
-        var sites: [(CGPoint, String)] = s.flashLocations.map { ($0, "피격") }
+        var mineSites = s.flashLocations
+        if let base = s.myBase {
+            mineSites.sort {
+                hypot($0.x - base.x, $0.y - base.y)
+                    < hypot($1.x - base.x, $1.y - base.y)
+            }
+        }
+        var sites: [(CGPoint, String)] = mineSites.map { ($0, "피격") }
         if s.mode == .team {
             sites += s.allyFlashLocations.map { ($0, "아군 피격") }
         }
@@ -66,7 +73,21 @@ public struct MinimapDangerRule: Rule {
     public init() {}
 
     public func evaluate(_ s: GameState) -> Verdict? {
-        for track in s.tracks
+        // 근접 위협 우선 (2026-08-25 실전 확정): 전역 간격 도입으로 발화 슬롯이
+        // 8초당 1개 — 그 슬롯은 본진에 가장 가까운 위협이 가져가야 한다.
+        // 실측: 투혼 컴퓨터전에서 "본진에 적" 33건이 큐 초과 폐기되는 동안
+        // 4~6시 원거리 알림이 슬롯을 소모
+        let ordered: [Track]
+        if let base = s.myBase {
+            ordered = s.tracks.sorted {
+                guard let a = $0.last?.p, let b = $1.last?.p else { return false }
+                return hypot(a.x - base.x, a.y - base.y)
+                     < hypot(b.x - base.x, b.y - base.y)
+            }
+        } else {
+            ordered = s.tracks
+        }
+        for track in ordered
         where track.faction == .enemy && track.framesHeld >= 3 {
             guard let point = track.last?.p,
                   ZoneLabeler.isInsideAlertZone(point, myBase: s.myBase) else { continue }
