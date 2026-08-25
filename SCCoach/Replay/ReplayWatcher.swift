@@ -57,10 +57,28 @@ public actor ReplayWatcher {
         return nil
     }
 
-    struct ReplayFile { let url: URL; let mtime: Date; let size: Int }
+    public struct ReplayFile {
+        public let url: URL
+        public let mtime: Date
+        public let size: Int
+    }
 
     /// AutoSave/**·루트의 .rep 중 최신 mtime (LastReplay.rep 포함)
     static func latestReplay(in directory: URL) -> ReplayFile? {
+        collectReplays(in: directory).max { $0.mtime < $1.mtime }
+    }
+
+    /// 백필 스캔 (§13 소급 분석): 기간 내 AutoSave .rep 전체, 오래된 순.
+    /// 루트의 LastReplay.rep 등 복사본은 제외 — AutoSave 원본과 중복 분석 방지
+    public static func allReplays(in directory: URL = defaultDirectory,
+                                  since: Date) -> [ReplayFile] {
+        collectReplays(in: directory)
+            .filter { $0.mtime >= since && $0.size > 0
+                && $0.url.deletingLastPathComponent().path.contains("AutoSave") }
+            .sorted { $0.mtime < $1.mtime }
+    }
+
+    private static func collectReplays(in directory: URL) -> [ReplayFile] {
         let fm = FileManager.default
         var candidates: [URL] = []
         let keys: [URLResourceKey] = [.contentModificationDateKey, .fileSizeKey]
@@ -81,13 +99,10 @@ public actor ReplayWatcher {
                 }
             }
         }
-        return candidates
-            .compactMap { url -> ReplayFile? in
-                guard let values = try? url.resourceValues(forKeys: Set(keys)),
-                      let mtime = values.contentModificationDate else { return nil }
-                return ReplayFile(url: url, mtime: mtime,
-                                  size: values.fileSize ?? 0)
-            }
-            .max { $0.mtime < $1.mtime }
+        return candidates.compactMap { url -> ReplayFile? in
+            guard let values = try? url.resourceValues(forKeys: Set(keys)),
+                  let mtime = values.contentModificationDate else { return nil }
+            return ReplayFile(url: url, mtime: mtime, size: values.fileSize ?? 0)
+        }
     }
 }

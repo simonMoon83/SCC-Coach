@@ -26,6 +26,9 @@ public struct SupplyBlockRule: Rule {
     }
     static let rateWindow = 30.0
     static let cooldownSeconds = 25.0
+    /// 실사용 튜닝 (2026-08-25, 사용자): 초반은 빌드가 손에 있어 안 막힌다 —
+    /// 알림은 멀티태스킹이 몰리는 중반부터. 5분 전 침묵
+    static let quietUntilSeconds = 300.0
 
     /// 규칙 × 종족의 발화 가능 문장 전수 (AlertCatalog 열거용)
     static var allPhrases: [String] {
@@ -50,6 +53,8 @@ public struct SupplyBlockRule: Rule {
     public init() {}
 
     public func evaluate(_ s: GameState) -> Verdict? {
+        guard let elapsed = s.elapsed, elapsed >= Self.quietUntilSeconds
+        else { return nil }
         guard let supply = s.supply,
               let rate = s.supplyGrowthRate(window: Self.rateWindow),
               rate > 0 else { return nil }

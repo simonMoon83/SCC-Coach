@@ -28,6 +28,12 @@ public struct MinimapFlashRule: Rule {
         }
         for (location, suffix) in sites {
             if let vp = s.viewportRect, vp.contains(location) { continue }
+            // 전역 간격 (팀전 폭주 억제 — 실측 194발화/12분): 아군 피격은 12초,
+            // 내 피격은 4초 (긴급성 유지하되 연사 방지)
+            let isAlly = suffix.contains("아군")
+            if s.recentlyDeliveredAny(ruleID: id, within: isAlly ? 12 : 4) {
+                continue
+            }
             guard s.blips.contains(where: {
                 $0.faction == .enemy
                     && hypot($0.center.x - location.x, $0.center.y - location.y)
@@ -42,8 +48,10 @@ public struct MinimapFlashRule: Rule {
             return Verdict(alert: Alert(
                 ruleID: id,
                 phrase: phrase,
-                priority: .urgent,
-                refire: .cooldownPerPhrase(5),
+                // 아군 피격은 warn — 내 조작이 필요한 긴급이 아니다. 인터럽트
+                // 폭주가 체감 소음·큐 초과의 주범 (실측)
+                priority: isAlly ? .warn : .urgent,
+                refire: .cooldownPerPhrase(isAlly ? 15 : 5),
                 location: location))
         }
         return nil
@@ -63,6 +71,7 @@ public struct MinimapDangerRule: Rule {
             guard let point = track.last?.p,
                   ZoneLabeler.isInsideAlertZone(point, myBase: s.myBase) else { continue }
             // pixels 조건은 현재 blip에서 확인 (트랙은 위치만 보유)
+            if s.recentlyDeliveredAny(ruleID: id, within: 8) { return nil }
             let pixels = s.blips.first {
                 $0.colorKey == track.colorKey
                     && hypot($0.center.x - point.x, $0.center.y - point.y) < 0.02

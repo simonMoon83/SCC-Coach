@@ -105,6 +105,15 @@ public struct GameState {
         }
     }
 
+    /// 규칙 단위 전역 최근 발화 — 문구(존) 무관. 팀전 폭주 억제용 (실측:
+    /// 투혼 팀전 12분에 발화 194건·큐초과 131건 — 존별 쿨다운만으론 못 막음)
+    public func recentlyDeliveredAny(ruleID: String,
+                                     within seconds: TimeInterval) -> Bool {
+        alertLog.elements.contains {
+            $0.ruleID == ruleID && streamNow - $0.t < seconds
+        }
+    }
+
     /// oncePerKey 알림의 발화 완료 여부 — 발화 후 재제안 차단(dropped 레코드 스팸 방지,
     /// 리뷰 확정). 한계: alertLog 링버퍼(64) 축출 후엔 false — 그땐 버스가 키로 드랍
     public func everDelivered(ruleID: String, phrase: String) -> Bool {

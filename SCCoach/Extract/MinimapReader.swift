@@ -11,6 +11,8 @@ public final class MinimapReader: Extractor {
     private var tracker = Tracker()
     private var flash = FlashDetector()
     private var allyFlash = FlashDetector()
+    /// 직전 프레임의 미지 색 키 — 2프레임 지속 게이트용 (게이트 ③)
+    private var previousUnknownKeys: Set<Int> = []
 
     public init() {}
 
@@ -18,6 +20,7 @@ public final class MinimapReader: Extractor {
         tracker.reset()
         flash.reset()
         allyFlash.reset()
+        previousUnknownKeys = []
     }
 
     public func process(_ frame: Frame, regions: Regions, into state: inout GameState) {
@@ -35,18 +38,32 @@ public final class MinimapReader: Extractor {
         // 전원 미검출·적 알림 0건). 게임 시작 10초 내 등장 미지 색 = 동맹 추정
         // (공유 시야로 시작부터 보임 — 실측), 이후 새로 등장 = 적 추정.
         // 표본 12픽셀↑·기존 기준과 거리 40↑·진영당 최대 6색.
+        //
+        // 게이트 3종 (실전 확정 2026-08-25: 컴퓨터 1:1 투혼 2판에서 본진 미네랄
+        // 시안이 시작 10초 창의 '미지 색'으로 잡혀 동맹 추론 → mode=.team →
+        // "아군 피격" 76건 전건 오탐 + 큐 초과 131건):
+        //   ① 자원 색 제외 (isResourceColor — 미네랄 시안 실측)
+        //   ② 동맹 추론은 로비 경유 + 로비 3인↑에서만 — 1:1엔 동맹이 없다
+        //   ③ 직전 프레임에도 보인 색만 채택 — 팔레트 전환·이펙트 잔상 방어
         if let start = state.clock.inGameStart {
             let early = frame.timestamp - start <= 10.0
+            let allyPossible = state.inGameEntryFrom == .lobby
+                && (state.slots.isEmpty || state.slots.count > 2)
             var adopted = false
-            for stat in scan.unknownColors.values.sorted(by: { $0.count > $1.count })
+            let currentKeys = Set(scan.unknownColors.keys)
+            for (key, stat) in scan.unknownColors
+                .sorted(by: { $0.value.count > $1.value.count })
             where stat.count >= 12 {
+                guard previousUnknownKeys.contains(key) else { continue }
                 let color = ObservedColor(r: stat.r / stat.count,
                                           g: stat.g / stat.count,
                                           b: stat.b / stat.count)
-                guard !Self.isNearKnown(color, state: state, table: table)
+                guard !Self.isResourceColor(color),
+                      !Self.isNearKnown(color, state: state, table: table)
                 else { continue }
                 if early {
-                    guard state.inferredAllyColors.count < 6 else { continue }
+                    guard allyPossible,
+                          state.inferredAllyColors.count < 6 else { continue }
                     state.inferredAllyColors.append(color)
                 } else {
                     guard state.inferredEnemyColors.count < 6 else { continue }
@@ -54,6 +71,7 @@ public final class MinimapReader: Extractor {
                 }
                 adopted = true
             }
+            previousUnknownKeys = currentKeys
             if adopted {   // 이번 프레임부터 반영 — 새 기준으로 재스캔
                 table = ColorTable(observedPlayers: state.observedPlayers,
                                    myColor: state.myObservedColor,
@@ -158,6 +176,13 @@ public final class MinimapReader: Extractor {
                 buffer: frame.pixelBuffer, rect: rect, around: base, radius: 0.10)
         }
 
+    }
+
+    /// 자원 색 — 미니맵의 미네랄·가스 표시. 플레이어 색 추론 후보가 될 수 없다.
+    /// 실측 (픽스처 3장 정합, 2026-08-25): 미네랄 시안 평균 RGB (53, 221, 247).
+    /// 맨해튼 거리 90 미만이면 자원 (플레이어 틸 (0,166,166)은 d=191로 안전)
+    static func isResourceColor(_ c: ObservedColor) -> Bool {
+        abs(c.r - 53) + abs(c.g - 221) + abs(c.b - 247) < 90
     }
 
     /// 이미 아는 색(고정 3·내 색·동맹창·기추론)과 가까우면 새 추론 후보에서 제외

@@ -93,6 +93,30 @@ final class MinimapTests: XCTestCase {
         XCTAssertNotNil(state.myBase, "전이 3초 내 뷰포트 중심 = myBase")
     }
 
+    func testMineralCyanIsNeverInferredAsPlayer() throws {
+        // 실전 확정 2026-08-25: 본진 미네랄 시안(실측 avg RGB (53,221,247),
+        // palette_fixed_t109에 ~290px)이 시작 10초 창에서 '동맹'으로 추론돼
+        // "아군 피격" 폭주. 자원 색은 어느 진영으로도 추론되지 않아야 한다
+        XCTAssertTrue(MinimapReader.isResourceColor(
+            ObservedColor(r: 53, g: 221, b: 247)))
+        XCTAssertFalse(MinimapReader.isResourceColor(
+            ObservedColor(r: 0, g: 166, b: 166)), "플레이어 틸은 자원이 아니다")
+        let frame = try FixtureSource.loadFrame(
+            url: Self.fixturesURL.appendingPathComponent("minimap/palette_fixed_t109.png"),
+            timestamp: 3)
+        let regions = try minimapRegions(for: frame.size)
+        var s = GameState()
+        s.clock.markInGameStart(atStream: 0)
+        s.inGameEntryFrom = .lobby              // 동맹 추론 창 활성 조건
+        let reader = MinimapReader()
+        reader.process(frame, regions: regions, into: &s)
+        reader.process(frame, regions: regions, into: &s)
+        XCTAssertTrue(s.inferredAllyColors.allSatisfy {
+            !MinimapReader.isResourceColor($0) }, "미네랄 시안 동맹 추론 금지")
+        XCTAssertTrue(s.inferredEnemyColors.allSatisfy {
+            !MinimapReader.isResourceColor($0) })
+    }
+
     func testPlayerPaletteInfersUnknownColors() throws {
         // 개별 색 모드 — v2(실전 확정: 빨무 적 3명 미검출): 미지 색을 추론한다.
         // 시작 10초 내 등장 = 동맹 추정, 이후 등장 = 적 추정 (§6.4-5)
@@ -101,22 +125,45 @@ final class MinimapTests: XCTestCase {
             timestamp: 60)                       // 중반 프레임 — 미지 색 = 적
         let regions = try minimapRegions(for: frame.size)
 
+        // 게이트 ③ (2026-08-25): 채택은 2프레임 지속 요구 — 같은 프레임 2회 주입
         var late = GameState()
         late.clock.markInGameStart(atStream: 0)
-        MinimapReader().process(frame, regions: regions, into: &late)
+        let lateReader = MinimapReader()
+        lateReader.process(frame, regions: regions, into: &late)
+        XCTAssertTrue(late.inferredEnemyColors.isEmpty, "첫 프레임은 채택 보류")
+        lateReader.process(frame, regions: regions, into: &late)
         XCTAssertGreaterThan(late.blips.filter { $0.faction == .enemy }
             .reduce(0) { $0 + $1.pixels }, 10, "미지 마젠타 → 적 추론 검출")
         XCTAssertFalse(late.inferredEnemyColors.isEmpty)
 
-        // 같은 프레임이 시작 직후(10초 내)라면 동맹 추정 — 적 아님
+        // 같은 프레임이 시작 직후(10초 내)라면 동맹 추정 — 적 아님.
+        // 게이트 ② (2026-08-25): 동맹 추론은 로비 경유 + 로비 3인↑(미상 포함)에서만
         let earlyFrame = try FixtureSource.loadFrame(
             url: Self.fixturesURL.appendingPathComponent("minimap/palette_player_t299.png"),
             timestamp: 3)
         var early = GameState()
         early.clock.markInGameStart(atStream: 0)
-        MinimapReader().process(earlyFrame, regions: regions, into: &early)
+        early.inGameEntryFrom = .lobby
+        let earlyReader = MinimapReader()
+        earlyReader.process(earlyFrame, regions: regions, into: &early)
+        earlyReader.process(earlyFrame, regions: regions, into: &early)
         XCTAssertEqual(early.inferredEnemyColors.count, 0)
         XCTAssertFalse(early.inferredAllyColors.isEmpty, "시작 창 미지 색 = 동맹 추정")
+
+        // 1:1 로비(슬롯 2)면 동맹 추론 봉인 — 실전 확정 2026-08-25 (컴퓨터 1:1
+        // 투혼에서 유령 동맹 → mode=.team → "아군 피격" 76건 전건 오탐)
+        var duo = GameState()
+        duo.clock.markInGameStart(atStream: 0)
+        duo.inGameEntryFrom = .lobby
+        duo.slots = [
+            PlayerSlot(label: "다크호스", controller: "다크호스", race: .zerg,
+                       isComputer: false, isMe: true),
+            PlayerSlot(label: "알파 분대", controller: "컴퓨터", race: .terran,
+                       isComputer: true, isMe: false)]
+        let duoReader = MinimapReader()
+        duoReader.process(earlyFrame, regions: regions, into: &duo)
+        duoReader.process(earlyFrame, regions: regions, into: &duo)
+        XCTAssertTrue(duo.inferredAllyColors.isEmpty, "1:1 — 동맹 추론 금지")
 
         // 동맹창 관측이 있으면 그 진영 판정이 우선 (관측 마젠타 = 적)
         var informed = GameState()
@@ -353,26 +400,34 @@ final class MinimapTests: XCTestCase {
         s.streamNow = 100
         s.myBase = CGPoint(x: 0.5, y: 0.5)
         func standing(_ p: CGPoint) -> Track {
+            standing2(p, at: 100)
+        }
+        func standing2(_ p: CGPoint, at t: TimeInterval) -> Track {
             Track(colorKey: 0, faction: .enemy, history: [
-                TrackPoint(t: 99.9, p: p), TrackPoint(t: 100, p: p),
-                TrackPoint(t: 100.03, p: p)])
+                TrackPoint(t: t - 0.1, p: p), TrackPoint(t: t, p: p),
+                TrackPoint(t: t + 0.03, p: p)])
         }
         let home = CGPoint(x: 0.52, y: 0.52)      // "본진"
         let three = CGPoint(x: 0.78, y: 0.5)      // "3시" (존 안, 본진 반경 밖)
         s.blips = [Blip(center: home, pixels: 6, colorKey: 0, faction: .enemy),
                    Blip(center: three, pixels: 6, colorKey: 0, faction: .enemy)]
         s.tracks = [standing(home), standing(three)]
-        // 본진 문장은 방금 발화됨 (쿨다운 중)
+        // 본진 문장은 발화됨 — 전역 간격(8초, 2026-08-25 폭주 억제) 안에서는
+        // 다음 존도 침묵, 간격이 지나면 문장 쿨다운을 건너뛰고 다음 존 보고
         s.apply(.logAlert(ruleID: "minimap.enemy", phrase: "본진에 적",
                           priority: .warn, atStream: 98))
+        XCTAssertNil(MinimapDangerRule().evaluate(s),
+                     "전역 간격 내 — 다른 존도 침묵 (발화 시차화)")
+        s.streamNow = 107                          // 발화 +9초 — 간격 밖, 쿨다운 내
+        s.tracks = [standing2(home, at: 107), standing2(three, at: 107)]
         let verdict = MinimapDangerRule().evaluate(s)
         XCTAssertEqual(verdict?.alert?.phrase, "3시에 적",
                        "쿨다운 문장을 건너뛰고 다음 존 보고")
 
-        // flash도 동일 규율
+        // flash도 동일 규율 — 전역 간격(4초) 밖·문장 쿨다운(5초) 안 시각으로 발화 이력
         s.flashLocations = [home, three]
         s.apply(.logAlert(ruleID: "minimap.flash", phrase: "본진 피격",
-                          priority: .urgent, atStream: 99))
+                          priority: .urgent, atStream: 102.5))
         XCTAssertEqual(MinimapFlashRule().evaluate(s)?.alert?.phrase, "3시 피격")
     }
 }

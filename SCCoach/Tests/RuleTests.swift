@@ -6,7 +6,7 @@ final class RuleTests: XCTestCase {
 
     /// 게임 시작 후 supply가 일정 속도로 오르는 상태 조립
     func makeState(used: Int, max: Int, rate: Double,
-                   elapsed: TimeInterval = 120) -> GameState {
+                   elapsed: TimeInterval = 360) -> GameState {
         var s = GameState()
         s.phase = .inGame
         s.clock.markInGameStart(atStream: 0)
@@ -32,6 +32,15 @@ final class RuleTests: XCTestCase {
         XCTAssertEqual(verdict?.alert?.ruleID, "supply.block")
         XCTAssertEqual(verdict?.alert?.priority, .warn)
         XCTAssertNil(verdict?.alert?.location, "B-2 — 위치 없는 알림")
+    }
+
+    func testSilentInOpeningFiveMinutes() {
+        // 실사용 튜닝 (2026-08-25, 사용자): 초반 5분은 침묵 — 같은 임박 상태라도
+        let s = makeState(used: 60, max: 66, rate: 0.35, elapsed: 120)
+        XCTAssertNil(SupplyBlockRule().evaluate(s))
+        XCTAssertNotNil(SupplyBlockRule()
+            .evaluate(makeState(used: 60, max: 66, rate: 0.35, elapsed: 301)),
+            "5분 경과 후엔 발화")
     }
 
     func testSilentWhenHeadroomLarge() {

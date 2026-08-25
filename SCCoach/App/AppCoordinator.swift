@@ -41,7 +41,24 @@ final class AppCoordinator: ObservableObject {
         guard runTask == nil else { return }
         runTask = Task {
             await pipeline.prepare()   // 음성 사전 렌더 (§5.1) + 세션 로그 열기
+            startBackfill()
             await run()
+        }
+    }
+
+    /// §13 소급 분석 — 판 직후 앱을 끄면 ended 트리거가 못 돈다 (실전 확정
+    /// 2026-08-25: 그날 2판 전부 누락). 시작 시 한 번, 라이브 분석 체인 뒤에 태워
+    /// 동시 실행·중복 생성을 차단. 코칭 파이프라인 밖(원칙 3).
+    private func startBackfill() {
+        let previous = replayAnalysisChain
+        replayAnalysisChain = Task { [weak self] in
+            await previous?.value
+            guard let self else { return }
+            let name = await self.pipeline.currentPlayerName()
+            for line in await ReplayAnalysisFlow.backfill(playerName: name) {
+                self.appendLog("            \(line)")
+                self.logger.info("\(line, privacy: .public)")
+            }
         }
     }
 
