@@ -68,6 +68,12 @@ public final class CoachCore {
         lobbyReader.playerName = name
     }
 
+    /// 커맨드 진입점 — §11 규칙별 on/off. nil = 전체 활성.
+    /// 커맨드는 결정성 입력의 일부(§10) — setRegions·setPlayerName과 동급
+    public func setEnabledRuleIDs(_ ids: Set<String>?) {
+        engine.enabledRuleIDs = ids
+    }
+
     public func ingest(_ frame: Frame) -> [CoreOutput] {
         state.streamNow = frame.timestamp
         guard let regions else { return [.snapshot(state)] }

@@ -12,6 +12,8 @@ public final class RuleEngine {
     }
 
     private let rules: [any Rule]
+    /// 활성 규칙 집합 (§11 규칙별 on/off) — nil = 전체. CoachCore 커맨드로만 변경
+    var enabledRuleIDs: Set<String>?
 
     public init(rules: [any Rule]) {
         self.rules = rules
@@ -20,6 +22,7 @@ public final class RuleEngine {
     public func tick(_ s: inout GameState, bus: AlertBus) -> [Event] {
         var events: [Event] = []
         for rule in rules {
+            if let enabled = enabledRuleIDs, !enabled.contains(rule.id) { continue }
             guard let verdict = rule.evaluate(s) else { continue }
             for effect in verdict.effects { s.apply(effect) }
             guard let alert = verdict.alert else { continue }

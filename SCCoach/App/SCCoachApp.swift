@@ -34,6 +34,7 @@ struct StatusView: View {
     @EnvironmentObject var coordinator: AppCoordinator
     @Environment(\.openWindow) private var openWindow
     @AppStorage("playerName") private var playerName = ""
+    @AppStorage("minimapAlertsEnabled") private var minimapAlertsEnabled = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -53,6 +54,17 @@ struct StatusView: View {
                     .frame(maxWidth: 220)
                     .onChange(of: playerName) { _, newValue in
                         coordinator.updatePlayerName(newValue)
+                    }
+                Spacer()
+            }
+            HStack {
+                // 2026-08-27 사용자 확정: 기본은 매크로 2종(미네랄·인구수)만.
+                // 미니맵·정찰 계열은 오탐 검증이 끝나면 여기서 다시 켠다
+                Toggle("미니맵·정찰 알림 (실험적 — 기본 꺼짐)",
+                       isOn: $minimapAlertsEnabled)
+                    .font(.caption)
+                    .onChange(of: minimapAlertsEnabled) { _, _ in
+                        coordinator.updateAlertScope()
                     }
                 Spacer()
             }

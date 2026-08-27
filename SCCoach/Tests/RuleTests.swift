@@ -81,6 +81,20 @@ final class RuleTests: XCTestCase {
         }
     }
 
+    func testEngineHonorsEnabledRuleFilter() {
+        // §11 규칙별 on/off (2026-08-27 사용자 확정: 기본 = 매크로 2종만) —
+        // 필터 밖 규칙은 평가 자체가 건너뛰어진다
+        var s = makeState(used: 60, max: 66, rate: 0.35)
+        let engine = RuleEngine(rules: [SupplyBlockRule()])
+        engine.enabledRuleIDs = ["macro.float"]        // supply 제외
+        XCTAssertTrue(engine.tick(&s, bus: AlertBus()).isEmpty, "비활성 규칙 침묵")
+        engine.enabledRuleIDs = ["supply.block", "macro.float"]
+        XCTAssertFalse(engine.tick(&s, bus: AlertBus()).isEmpty, "활성 시 발화")
+        engine.enabledRuleIDs = nil
+        var s2 = makeState(used: 60, max: 66, rate: 0.35)
+        XCTAssertFalse(engine.tick(&s2, bus: AlertBus()).isEmpty, "nil = 전체")
+    }
+
     func testEngineAppliesLogOnDeliveryAndCooldownSuppresses() {
         var s = makeState(used: 60, max: 66, rate: 0.35)
         let bus = AlertBus()

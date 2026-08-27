@@ -74,6 +74,11 @@ final class AppCoordinator: ObservableObject {
         Task { await pipeline.refreshPlayerNameFromDefaults() }
     }
 
+    /// §11 규칙별 on/off 토글 — UserDefaults에서 다시 읽어 즉시 반영
+    func updateAlertScope() {
+        Task { await pipeline.refreshAlertScopeFromDefaults() }
+    }
+
     // MARK: - 메인 루프
 
     private func run() async {

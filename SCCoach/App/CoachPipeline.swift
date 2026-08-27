@@ -60,6 +60,7 @@ actor CoachPipeline {
         // 아직 안 렌더된 문장의 발화는 playAlert의 버퍼 부재 경로(즉시 완료)로 무해
         Task { await voiceBank.prerender(AlertCatalog.allPhrases()) }
         openSessionLog()
+        refreshAlertScopeFromDefaults()
         // 출력 장치 변경으로 completion이 유실되면 버스가 잠긴다 — 재생 완료로 처리
         audio.onConfigurationChange = { [weak self] in
             Task { await self?.audioInterrupted() }
@@ -134,6 +135,13 @@ actor CoachPipeline {
     }
 
     /// UI 경유 변경 — UserDefaults의 최신값을 액터 안에서 읽어 순서 역전 무해화
+    /// 알림 범위 (2026-08-27 사용자 확정: 미니맵·정찰 계열은 오탐 검증이 끝날
+    /// 때까지 기본 꺼짐 — 매크로 2종(미네랄·인구수)만). 토글은 즉시 반영
+    func refreshAlertScopeFromDefaults() {
+        let minimapOn = UserDefaults.standard.bool(forKey: "minimapAlertsEnabled")
+        core.setEnabledRuleIDs(minimapOn ? nil : ["supply.block", "macro.float"])
+    }
+
     func refreshPlayerNameFromDefaults() {
         core.setPlayerName(
             UserDefaults.standard.string(forKey: "playerName") ?? "")

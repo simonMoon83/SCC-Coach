@@ -38,6 +38,8 @@ SPM 매핑 (설계 §3 구조 유지): `SCCoachKit` = `SCCoach/`(App·Tests 제�
 
 **실측 진척(2026-08-22)**: 사용자 녹화 1편에서 픽스처 127장 적재(`SCCoach/Tests/Fixtures/` — supply 16·phase 5·flash 시퀀스 2 + `regions-1750x1242.json`). 시계 rate=1.0 실측. **§6.2 "순수 빨강" 마스크 가설은 실측 기각 — 경보는 소유 색 고휘도 토글(~2.5Hz)**. 상세·미확보 목록은 [PREPARATION.md](PREPARATION.md) §5. FlashDetector 구현 시 설계 문서보다 이 실측이 우선.
 
+**알림 범위 (2026-08-27 사용자 확정)**: 기본 = 매크로 2종만(`supply.block`·`macro.float`) — 미니맵·정찰 계열은 이틀 연속 오탐(유령 동맹·간헐천)으로 신뢰 회복 전까지 꺼짐. 상태 창 토글 "미니맵·정찰 알림 (실험적)"로 재활성(`minimapAlertsEnabled`, RuleEngine.enabledRuleIDs 경유 즉시 반영). 미니맵 추출은 계속 돌므로(세션 로그·사후 분석용) 오탐 검증은 로그로 계속 가능.
+
 ## 구현 시 결정할 것
 
 시뮬레이션 문서 B-1~B-10은 해당 단계 구현 때 결정하고 **결정값을 설계 문서에 기입**한다(예: B-4 delay 기준점은 설계 §8에 이미 "발화 시점"으로 확정됨 — 시뮬레이션 문서가 더 오래된 서술). C군(FlashDetector 마스크 등)은 가설 — 0단계 픽스처로 확정 전에 상수로 굳히지 말 것.
