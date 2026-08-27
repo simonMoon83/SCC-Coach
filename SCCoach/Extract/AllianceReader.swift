@@ -31,7 +31,22 @@ public final class AllianceReader: Extractor {
         if !gatePassed { lastForcedAttemptAt = frame.timestamp }
         let players = Self.readDialog(in: frame.pixelBuffer)
         if !players.isEmpty {
-            state.observedPlayers = players
+            state.observedPlayers = Self.sanitized(players,
+                                                   slotCount: state.slots.count)
+        }
+    }
+
+    /// 1:1 봉인 (실전 확정 2026-08-27): 로비 2인 게임에 동맹은 존재할 수 없다.
+    /// 체크박스 오독 한 번이 유령 팀전(mode=.team)을 만들면 컴퓨터가 '아군'이
+    /// 되어 내가 공격할 때마다 "1시 아군 피격"이 울린다(실로그 6건). 색 관측은
+    /// 보존(적 색 학습 경로 — §6.4 관측 우선) — isAlly만 강제 해제
+    static func sanitized(_ players: [ObservedPlayer],
+                          slotCount: Int) -> [ObservedPlayer] {
+        guard slotCount == 2 else { return players }
+        return players.map {
+            ObservedPlayer(name: $0.name, red: $0.red, green: $0.green,
+                           blue: $0.blue, isAlly: false,
+                           sharedVision: $0.sharedVision)
         }
     }
 

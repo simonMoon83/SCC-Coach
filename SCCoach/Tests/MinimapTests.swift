@@ -125,16 +125,17 @@ final class MinimapTests: XCTestCase {
             timestamp: 60)                       // 중반 프레임 — 미지 색 = 적
         let regions = try minimapRegions(for: frame.size)
 
-        // 게이트 ③ (2026-08-25): 채택은 2프레임 지속 요구 — 같은 프레임 2회 주입
+        // 게이트 ④ (2026-08-27): 같은 프레임 반복 = 정지 색 — 적 채택 금지.
+        // 가스 간헐천·미네랄 가장자리 톤(정지 지물)이 "본진에 적"을 만들던
+        // 경로의 회귀 방어. 움직임 판정 자체는 PendingUnknown 단위 테스트가 커버
         var late = GameState()
         late.clock.markInGameStart(atStream: 0)
         let lateReader = MinimapReader()
         lateReader.process(frame, regions: regions, into: &late)
         XCTAssertTrue(late.inferredEnemyColors.isEmpty, "첫 프레임은 채택 보류")
         lateReader.process(frame, regions: regions, into: &late)
-        XCTAssertGreaterThan(late.blips.filter { $0.faction == .enemy }
-            .reduce(0) { $0 + $1.pixels }, 10, "미지 마젠타 → 적 추론 검출")
-        XCTAssertFalse(late.inferredEnemyColors.isEmpty)
+        XCTAssertTrue(late.inferredEnemyColors.isEmpty,
+                      "정지 색은 적으로 채택하지 않는다 (간헐천 회귀)")
 
         // 같은 프레임이 시작 직후(10초 내)라면 동맹 추정 — 적 아님.
         // 게이트 ② (2026-08-25): 동맹 추론은 로비 경유 + 로비 3인↑(미상 포함)에서만
@@ -144,6 +145,10 @@ final class MinimapTests: XCTestCase {
         var early = GameState()
         early.clock.markInGameStart(atStream: 0)
         early.inGameEntryFrom = .lobby
+        early.slots = (0..<4).map {          // 게이트 ② — 3인↑ 로비만 동맹 추론
+            PlayerSlot(label: "p\($0)", controller: "p\($0)", race: .zerg,
+                       isComputer: $0 > 0, isMe: $0 == 0)
+        }
         let earlyReader = MinimapReader()
         earlyReader.process(earlyFrame, regions: regions, into: &early)
         earlyReader.process(earlyFrame, regions: regions, into: &early)
@@ -391,6 +396,40 @@ final class MinimapTests: XCTestCase {
             TrackPoint(t: 99.9, p: far), TrackPoint(t: 100, p: far),
             TrackPoint(t: 100.03, p: far)])]
         XCTAssertNil(MinimapDangerRule().evaluate(s))
+    }
+
+    func testMovementGateSeparatesArmiesFromScenery() {
+        // 게이트 ④ 판정 자체: 정지 지물은 everCells == maxConcurrent (칸을 못
+        // 벗어남), 행군은 everCells가 자란다. 문턱 = 3칸 초과
+        var still = MinimapReader.PendingUnknown()
+        for _ in 0..<20 {                    // 간헐천 — 20프레임 내내 같은 2칸
+            still.frames += 1
+            still.everCells.formUnion([10, 11])
+            still.maxConcurrent = max(still.maxConcurrent, 2)
+        }
+        XCTAssertFalse(still.hasMoved, "정지 색은 영원히 문턱을 못 넘는다")
+
+        var marching = MinimapReader.PendingUnknown()
+        for step in 0..<5 {                  // 행군 — 프레임마다 한 칸씩 전진
+            marching.frames += 1
+            marching.everCells.formUnion([step, step + 1])
+            marching.maxConcurrent = max(marching.maxConcurrent, 2)
+        }
+        XCTAssertTrue(marching.hasMoved, "움직인 색만 적 후보")
+    }
+
+    func testAllianceObservationIsSealedInOneVsOne() {
+        // 실전 확정 2026-08-27: 컴퓨터 1:1에서 동맹창 체크 오독 → 컴퓨터가
+        // '아군' → 내가 공격할 때마다 "1시 아군 피격". 2인 게임은 isAlly 강제
+        // 해제 — 색 관측(적 색 학습)은 보존
+        let read = [ObservedPlayer(name: "거대괴수 무리", red: 228, green: 228,
+                                   blue: 228, isAlly: true, sharedVision: true)]
+        let sealed = AllianceReader.sanitized(read, slotCount: 2)
+        XCTAssertEqual(sealed.count, 1)
+        XCTAssertFalse(sealed[0].isAlly, "1:1 — 동맹 관측 봉인")
+        XCTAssertEqual(sealed[0].red, 228, "색 관측은 보존 (적 색 학습)")
+        XCTAssertTrue(AllianceReader.sanitized(read, slotCount: 4)[0].isAlly,
+                      "3인↑ 로비는 관측 그대로")
     }
 
     func testNearestThreatWinsTheGlobalSlot() {

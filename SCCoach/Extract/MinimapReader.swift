@@ -11,8 +11,16 @@ public final class MinimapReader: Extractor {
     private var tracker = Tracker()
     private var flash = FlashDetector()
     private var allyFlash = FlashDetector()
-    /// 직전 프레임의 미지 색 키 — 2프레임 지속 게이트용 (게이트 ③)
-    private var previousUnknownKeys: Set<Int> = []
+    /// 미지 색 관측 이력 — 지속(게이트 ③)·이동(게이트 ④) 판정용.
+    /// everCells가 maxConcurrent보다 3칸 이상 크면 "움직인 색" — 정지 지물
+    /// (가스 간헐천·미네랄 가장자리 톤)은 영원히 이 문턱을 못 넘는다
+    struct PendingUnknown {
+        var frames = 0
+        var everCells: Set<Int> = []     // 32×32 그리드 — 지금까지 점유한 칸 합집합
+        var maxConcurrent = 0            // 한 프레임 최대 동시 점유 칸 수
+        var hasMoved: Bool { everCells.count - maxConcurrent >= 3 }
+    }
+    private var pendingUnknown: [Int: PendingUnknown] = [:]
 
     public init() {}
 
@@ -20,7 +28,7 @@ public final class MinimapReader: Extractor {
         tracker.reset()
         flash.reset()
         allyFlash.reset()
-        previousUnknownKeys = []
+        pendingUnknown = [:]
     }
 
     public func process(_ frame: Frame, regions: Regions, into state: inout GameState) {
@@ -43,18 +51,34 @@ public final class MinimapReader: Extractor {
         // 시안이 시작 10초 창의 '미지 색'으로 잡혀 동맹 추론 → mode=.team →
         // "아군 피격" 76건 전건 오탐 + 큐 초과 131건):
         //   ① 자원 색 제외 (isResourceColor — 미네랄 시안 실측)
-        //   ② 동맹 추론은 로비 경유 + 로비 3인↑에서만 — 1:1엔 동맹이 없다
-        //   ③ 직전 프레임에도 보인 색만 채택 — 팔레트 전환·이펙트 잔상 방어
+        //   ② 동맹 추론은 로비 경유 + 로비 3인↑에서만 — 1:1엔 동맹이 없다.
+        //      빈 슬롯 폴백 없음 (2026-08-27: 로비 미파싱을 명분으로 열어두면
+        //      1:1에서 유령 동맹이 재발한다)
+        //   ③ 2프레임 지속 — 팔레트 전환·이펙트 잔상 방어
+        //   ④ 적 채택은 "움직인 색"만 (2026-08-27 실전 확정: 내 색 Teal 판에서
+        //      가스 간헐천 초록이 10초 후 미지 색 = 적으로 채택 → "본진에 적"이
+        //      0:14부터 16초 간격 53회 — 실피격 0. 자원·중립 정지물은 색 대역
+        //      열거로 못 막는다 — 구조로 막는다: 적 군대는 반드시 움직인다.
+        //      한계: 정지 방어선만 보이는 적 색은 병력이 움직일 때까지 지연)
         if let start = state.clock.inGameStart {
             let early = frame.timestamp - start <= 10.0
             let allyPossible = state.inGameEntryFrom == .lobby
-                && (state.slots.isEmpty || state.slots.count > 2)
+                && state.slots.count > 2
             var adopted = false
             let currentKeys = Set(scan.unknownColors.keys)
+            for (key, stat) in scan.unknownColors where stat.count >= 12 {
+                var pending = pendingUnknown[key] ?? PendingUnknown()
+                pending.frames += 1
+                pending.everCells.formUnion(stat.cells)
+                pending.maxConcurrent = max(pending.maxConcurrent,
+                                            stat.cells.count)
+                pendingUnknown[key] = pending
+            }
             for (key, stat) in scan.unknownColors
                 .sorted(by: { $0.value.count > $1.value.count })
             where stat.count >= 12 {
-                guard previousUnknownKeys.contains(key) else { continue }
+                guard let pending = pendingUnknown[key],
+                      pending.frames >= 2 else { continue }
                 let color = ObservedColor(r: stat.r / stat.count,
                                           g: stat.g / stat.count,
                                           b: stat.b / stat.count)
@@ -66,12 +90,17 @@ public final class MinimapReader: Extractor {
                           state.inferredAllyColors.count < 6 else { continue }
                     state.inferredAllyColors.append(color)
                 } else {
-                    guard state.inferredEnemyColors.count < 6 else { continue }
+                    guard pending.hasMoved,
+                          state.inferredEnemyColors.count < 6 else { continue }
                     state.inferredEnemyColors.append(color)
                 }
                 adopted = true
             }
-            previousUnknownKeys = currentKeys
+            if pendingUnknown.count > 256 {   // 장기전 키 누적 상한
+                pendingUnknown = pendingUnknown.filter {
+                    currentKeys.contains($0.key)
+                }
+            }
             if adopted {   // 이번 프레임부터 반영 — 새 기준으로 재스캔
                 table = ColorTable(observedPlayers: state.observedPlayers,
                                    myColor: state.myObservedColor,
@@ -222,6 +251,9 @@ public final class MinimapReader: Extractor {
                 let mx = max(r, g, b), mn = min(r, g, b)
                 guard mx - mn > 80, mx > 120 else { continue }       // 채도색만
                 if r > 200 && g > 200 && b > 200 { continue }        // 뷰포트 흰색
+                if r < 120 && g > 180 && b > 180 { continue }        // 미네랄 시안 —
+                // 본진 주변 최다 채도색은 자원일 때가 많다 (2026-08-27: 내 색
+                // Teal 판 — 내 색 오학습이 피격·적 오탐의 연쇄 시작점)
                 let key = (r / 16) << 8 | (g / 16) << 4 | (b / 16)
                 hist[key, default: 0] += 1
                 let s = sums[key] ?? (0, 0, 0)
@@ -249,6 +281,7 @@ public final class MinimapReader: Extractor {
     struct UnknownColorStat {
         var count = 0
         var r = 0, g = 0, b = 0
+        var cells: Set<Int> = []         // 32×32 그리드 점유 칸 (이동 게이트 ④)
     }
 
     static func scanPixels(buffer: CVPixelBuffer, rect: CGRect,
@@ -299,6 +332,7 @@ public final class MinimapReader: Extractor {
                     var stat = unknown[key] ?? UnknownColorStat()
                     stat.count += 1
                     stat.r += r; stat.g += g; stat.b += b
+                    stat.cells.insert((y * 32 / h) << 5 | (x * 32 / w))
                     unknown[key] = stat
                 }
             }
