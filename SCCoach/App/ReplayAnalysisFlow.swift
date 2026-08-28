@@ -122,13 +122,16 @@ enum ReplayAnalysisFlow {
         return set
     }
 
-    /// 세션 로그에서 이 판의 알림 레코드 복원. 세션 파일은 마지막 기록 시각(mtime)이
-    /// 리플레이 mtime(게임 종료 직후 — 실측)과 30분 내인 것만 후보. 파일 안에 여러
-    /// 판이 있을 수 있어 atGame 역행·120초 공백으로 세그먼트를 끊고, 길이가
-    /// 리플레이와 ±90초 정합하는 마지막 세그먼트를 채택. 실패 시 빈 배열(단독 분석)
+    /// 세션 로그에서 이 판의 알림 레코드 복원 — 벽시계 앵커 방식 (2026-08-28
+    /// 확정: 세그먼트 길이 근사 매칭은 길이가 비슷한 이웃 판을 오귀속했고, 알림이
+    /// 조용한 구간 120초에 한 판이 두 조각 났다). 원리: 파일 mtime = 마지막
+    /// 레코드 기록 시각이므로 오프셋(mtime − last.atStream)으로 모든 레코드의
+    /// 벽시계를 복원할 수 있다. 리플레이의 [시작, 종료] 창(mtime − 길이 ~ mtime)
+    /// 안에 중점이 드는 세그먼트를 파일 불문 전부 모은다 — 조각도 합쳐진다
     static func sessionRecords(matching output: ScrepOutput,
-                                       repMtime: Date,
-                                       logsDir: URL) -> [CoachCore.AlertRecord] {
+                               repMtime: Date,
+                               logsDir: URL) -> [CoachCore.AlertRecord] {
+        let repStart = repMtime.addingTimeInterval(-output.durationSeconds)
         let fm = FileManager.default
         let keys: Set<URLResourceKey> = [.contentModificationDateKey]
         let sessions = ((try? fm.contentsOfDirectory(
@@ -136,47 +139,47 @@ enum ReplayAnalysisFlow {
             .filter { $0.lastPathComponent.hasPrefix("session-")
                 && $0.pathExtension == "jsonl" }
             .filter {
+                // 게임 도중~종료 후 30분 내에 마지막 기록이 있는 파일만 후보
                 guard let m = (try? $0.resourceValues(forKeys: keys))?
                     .contentModificationDate else { return false }
-                return abs(m.timeIntervalSince(repMtime)) < 1800
+                return m >= repStart.addingTimeInterval(-120)
+                    && m <= repMtime.addingTimeInterval(1800)
             }
         let decoder = JSONDecoder()
+        var matched: [CoachCore.AlertRecord] = []
         for file in sessions {
-            guard let text = try? String(contentsOf: file, encoding: .utf8)
-            else { continue }
+            guard let text = try? String(contentsOf: file, encoding: .utf8),
+                  let mtime = (try? file.resourceValues(forKeys: keys))?
+                      .contentModificationDate else { continue }
             let records = text.split(separator: "\n").compactMap {
                 try? decoder.decode(CoachCore.AlertRecord.self,
                                     from: Data($0.utf8))
             }
-            // 세그먼트 분리: atGame 역행(새 판 리셋) 또는 스트림 120초 공백
+            guard let last = records.last else { continue }
+            // 스트림 → 벽시계 오프셋 (파일 단위 — 스트림 축은 부팅 기준 단조)
+            let offset = mtime.timeIntervalSince1970 - last.atStream
+            // 세그먼트 분리는 게임 경계(atGame 역행)만 — 침묵 구간으로 안 가른다
             var segments: [[CoachCore.AlertRecord]] = []
             var current: [CoachCore.AlertRecord] = []
             for r in records {
-                if let last = current.last,
-                   (r.atGame ?? 0) < (last.atGame ?? 0) - 1
-                    || r.atStream - last.atStream > 120 {
+                if let prev = current.last,
+                   (r.atGame ?? 0) < (prev.atGame ?? 0) - 1 {
                     segments.append(current)
                     current = []
                 }
                 current.append(r)
             }
             if !current.isEmpty { segments.append(current) }
-            // 리플레이 길이와 정합하는 세그먼트 중 최장 채택. 레코드는 발화
-            // 시점이라 게임 길이보다 짧게 끝난다 — 초과만 배제(+90초), 하한은
-            // 완화. 한계: 길이가 비슷한 두 판이 한 세션에 있으면 오귀속 가능
-            // (백필은 최선 노력 — 라이브 경로는 확정 스냅숏이라 무관)
-            var best: [CoachCore.AlertRecord] = []
-            var bestLastGame = -1.0
             for segment in segments {
-                guard let lastGame = segment.compactMap(\.atGame).last,
-                      lastGame <= output.durationSeconds + 90,
-                      lastGame > bestLastGame else { continue }
-                best = segment
-                bestLastGame = lastGame
+                guard let f = segment.first, let l = segment.last else { continue }
+                let mid = offset + (f.atStream + l.atStream) / 2
+                if mid >= repStart.timeIntervalSince1970 - 60,
+                   mid <= repMtime.timeIntervalSince1970 + 60 {
+                    matched.append(contentsOf: segment)
+                }
             }
-            if !best.isEmpty { return best }
         }
-        return []
+        return matched.sorted { $0.atStream < $1.atStream }
     }
 
     static func logsDirectory() -> URL {
