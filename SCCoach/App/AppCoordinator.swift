@@ -22,6 +22,7 @@ final class AppCoordinator: ObservableObject {
         case scanning
         case capturing(windowTitle: String, size: CGSize)
         case capturingDerived(windowTitle: String, size: CGSize)   // 유도 좌표 — 확인 대기
+        case paused                                                // 탐지 일시정지 (사용자 토글)
     }
 
     @Published private(set) var status: Status = .scanning
@@ -34,6 +35,7 @@ final class AppCoordinator: ObservableObject {
     private let logger = Logger(subsystem: "SCCoach", category: "phase")
     private let pipeline = CoachPipeline()
     private var runTask: Task<Void, Never>?
+    private weak var currentCapture: LiveCapture?
     private var replayAnalysisChain: Task<Void, Never>?
     private var gameStartWallTime: Date?
 
@@ -79,10 +81,26 @@ final class AppCoordinator: ObservableObject {
         Task { await pipeline.refreshAlertScopeFromDefaults() }
     }
 
+    /// 탐지 일시정지 토글 — 켜면 진행 중인 캡처 세션을 즉시 끊는다
+    /// (스트림 종료 → run 루프가 일시정지 대기로 진입)
+    func updateDetectionPaused() {
+        if UserDefaults.standard.bool(forKey: "detectionPaused") {
+            currentCapture?.stop()
+        }
+    }
+
     // MARK: - 메인 루프
 
     private func run() async {
         while !Task.isCancelled {
+            // 탐지 일시정지 (2026-08-28 사용자 요구): 게임을 관찰 없이 하고 싶을 때.
+            // 캡처 자체를 붙이지 않는다(CPU 0) — 해제하면 재탐색으로 복귀.
+            // 일시정지 중 끝난 판은 다음 시작 백필·CLI(analyze)가 받는다
+            if UserDefaults.standard.bool(forKey: "detectionPaused") {
+                status = .paused
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                continue
+            }
             // 권한 게이트 — permissionLost 복귀 지점 (§4.1 정책 표 2행)
             if !Permissions.hasScreenCapture {
                 status = .needPermission
@@ -108,6 +126,7 @@ final class AppCoordinator: ObservableObject {
 
     private func captureSession(window: SCWindow) async -> SessionOutcome {
         let capture = LiveCapture(window: window)
+        currentCapture = capture
         let title = window.title ?? "SC:R"
         status = .capturing(windowTitle: title, size: window.frame.size)
         logger.info("창 연결: \(title, privacy: .public) \(String(describing: window.frame.size), privacy: .public)")

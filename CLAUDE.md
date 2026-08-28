@@ -38,7 +38,11 @@ SPM 매핑 (설계 §3 구조 유지): `SCCoachKit` = `SCCoach/`(App·Tests 제�
 
 **실측 진척(2026-08-22)**: 사용자 녹화 1편에서 픽스처 127장 적재(`SCCoach/Tests/Fixtures/` — supply 16·phase 5·flash 시퀀스 2 + `regions-1750x1242.json`). 시계 rate=1.0 실측. **§6.2 "순수 빨강" 마스크 가설은 실측 기각 — 경보는 소유 색 고휘도 토글(~2.5Hz)**. 상세·미확보 목록은 [PREPARATION.md](PREPARATION.md) §5. FlashDetector 구현 시 설계 문서보다 이 실측이 우선.
 
-**알림 범위 (2026-08-27 사용자 확정)**: 기본 = 매크로 2종만(`supply.block`·`macro.float`) — 미니맵·정찰 계열은 이틀 연속 오탐(유령 동맹·간헐천)으로 신뢰 회복 전까지 꺼짐. 상태 창 토글 "미니맵·정찰 알림 (실험적)"로 재활성(`minimapAlertsEnabled`, RuleEngine.enabledRuleIDs 경유 즉시 반영). 미니맵 추출은 계속 돌므로(세션 로그·사후 분석용) 오탐 검증은 로그로 계속 가능.
+## 사후 분석 CLI — Claude 워크플로 (2026-08-28 확정)
+
+**사용자가 "마지막 게임 분석해줘" / "N번째 게임 분석해줘"라고 하면** — `.build/debug/SCCoach analyze` (최신 판, 필요 시 `swift build` 먼저). `analyze list` = 최근 30일 목록(1 = 최신), `analyze N` = N번째 최근, `analyze <경로.rep>` = 특정 파일. 세션 로그 자동 짝짓기 → 리포트 (재)생성(같은 판 덮어쓰기 — 분석기 개선 반영) → 전적 갱신 → 마크다운 stdout. 산출물: `~/Library/Logs/SCCoach/`. CLI 출력은 원자료다 — **그대로 붙여넣지 말고 해석해서 전달할 것** (빌드·타이밍·오탐 대조는 리플레이 커맨드/세션 로그 교차로 심화 가능, screp 직접 호출: `tools/screp/screp -overview`).
+
+**알림 범위 (2026-08-27 사용자 확정)**: 기본 = 매크로 2종만(`supply.block`·`macro.float`) — 미니맵·정찰 계열은 이틀 연속 오탐(유령 동맹·간헐천)으로 신뢰 회복 전까지 꺼짐. 상태 창 토글 "미니맵·정찰 알림 (실험적)"로 재활성(`minimapAlertsEnabled`, RuleEngine.enabledRuleIDs 경유 즉시 반영). "탐지 일시정지" 토글(2026-08-28) = 캡처 자체 중단(CPU 0) — 일시정지 중 판은 다음 시작 백필·CLI가 받는다. 미니맵 추출은 계속 돌므로(세션 로그·사후 분석용) 오탐 검증은 로그로 계속 가능.
 
 ## 구현 시 결정할 것
 

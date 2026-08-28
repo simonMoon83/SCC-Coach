@@ -104,7 +104,7 @@ enum ReplayAnalysisFlow {
     }
 
     /// 기존 분석 산출물의 replay.startTime 집합 (미분석 판별 키)
-    private static func analyzedStartTimes(in dir: URL) -> Set<String> {
+    static func analyzedStartTimes(in dir: URL) -> Set<String> {
         struct Probe: Decodable {
             struct R: Decodable { let startTime: String? }
             let replay: R
@@ -126,7 +126,7 @@ enum ReplayAnalysisFlow {
     /// 리플레이 mtime(게임 종료 직후 — 실측)과 30분 내인 것만 후보. 파일 안에 여러
     /// 판이 있을 수 있어 atGame 역행·120초 공백으로 세그먼트를 끊고, 길이가
     /// 리플레이와 ±90초 정합하는 마지막 세그먼트를 채택. 실패 시 빈 배열(단독 분석)
-    private static func sessionRecords(matching output: ScrepOutput,
+    static func sessionRecords(matching output: ScrepOutput,
                                        repMtime: Date,
                                        logsDir: URL) -> [CoachCore.AlertRecord] {
         let fm = FileManager.default
@@ -179,13 +179,13 @@ enum ReplayAnalysisFlow {
         return []
     }
 
-    private static func logsDirectory() -> URL {
+    static func logsDirectory() -> URL {
         FileManager.default
             .urls(for: .libraryDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Logs/SCCoach", isDirectory: true)
     }
 
-    private static func write(report: PostGameAnalyzer.AnalysisReport,
+    static func write(report: PostGameAnalyzer.AnalysisReport,
                               stamp: Date = Date())
         throws -> (json: String, md: String) {
         let dir = logsDirectory()

@@ -2,8 +2,22 @@ import AppKit
 import SCCoachKit
 import SwiftUI
 
-// 상태 창 — 창 탐색·페이즈 전이 로그·설정. 오버레이 NSWindow(§5.3)는 5단계.
+// 진입 분기: `SCCoach analyze …` = 사후 분석 CLI (GUI 없이 — Claude/터미널
+// 요청용, 2026-08-28 사용자 요구 "마지막 게임 분석해줘"를 한 명령으로),
+// 그 외 = 상태 창 앱
 @main
+enum SCCoachMain {
+    static func main() {
+        if CommandLine.arguments.count > 1,
+           CommandLine.arguments[1] == "analyze" {
+            AnalyzeCLI.run(Array(CommandLine.arguments.dropFirst(2)))
+        } else {
+            SCCoachApp.main()
+        }
+    }
+}
+
+// 상태 창 — 창 탐색·페이즈 전이 로그·설정. 오버레이 NSWindow(§5.3)는 5단계.
 struct SCCoachApp: App {
     @StateObject private var coordinator = AppCoordinator()
 
@@ -35,6 +49,7 @@ struct StatusView: View {
     @Environment(\.openWindow) private var openWindow
     @AppStorage("playerName") private var playerName = ""
     @AppStorage("minimapAlertsEnabled") private var minimapAlertsEnabled = false
+    @AppStorage("detectionPaused") private var detectionPaused = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -65,6 +80,11 @@ struct StatusView: View {
                     .font(.caption)
                     .onChange(of: minimapAlertsEnabled) { _, _ in
                         coordinator.updateAlertScope()
+                    }
+                Toggle("탐지 일시정지", isOn: $detectionPaused)
+                    .font(.caption)
+                    .onChange(of: detectionPaused) { _, _ in
+                        coordinator.updateDetectionPaused()
                     }
                 Spacer()
             }
@@ -131,6 +151,8 @@ struct StatusView: View {
             return "캡처 중: \(title) \(Int(size.width))×\(Int(size.height))"
         case .capturingDerived(let title, let size):
             return "캡처 중(유도 좌표): \(title) \(Int(size.width))×\(Int(size.height)) — 게임 시작 시 자동 확인"
+        case .paused:
+            return "탐지 일시정지 — 게임을 관찰하지 않는 중 (끝난 판은 다음 시작 때 자동 분석)"
         }
     }
 
@@ -140,6 +162,7 @@ struct StatusView: View {
         case .capturingDerived: return .orange
         case .scanning: return .yellow
         case .needPermission: return .red
+        case .paused: return .gray
         }
     }
 }
