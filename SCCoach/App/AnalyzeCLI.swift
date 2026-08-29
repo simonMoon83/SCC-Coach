@@ -17,8 +17,16 @@ enum AnalyzeCLI {
     static func run(_ args: [String]) {
         let recent = ReplayWatcher.allReplays(
             since: Date().addingTimeInterval(-30 * 24 * 3600))
+        let lastUMS = newerLastReplay(than: recent)
         if args.first == "list" {
+            if let u = lastUMS {
+                print("최신: \(u.path) (AutoSave 미기록 — 유즈맵 추정, 무인자 analyze가 선택)")
+            }
             list(recent)
+            return
+        }
+        if args.isEmpty, let ums = lastUMS {
+            analyze(ums)
             return
         }
         guard let target = resolveTarget(args: args, recent: recent) else {
@@ -27,6 +35,20 @@ enum AnalyzeCLI {
             exit(1)
         }
         analyze(target)
+    }
+
+    /// 유즈맵 판은 AutoSave에 기록되지 않는다 (실측 2026-08-29) — LastReplay.rep가
+    /// 최신 AutoSave보다 확실히 새로우면(멜레 복사본 오차 60초 초과) 그게 마지막 판
+    private static func newerLastReplay(
+        than recent: [ReplayWatcher.ReplayFile]) -> URL? {
+        let url = ReplayWatcher.defaultDirectory
+            .appendingPathComponent("LastReplay.rep")
+        guard let m = (try? url.resourceValues(
+            forKeys: [.contentModificationDateKey]))?.contentModificationDate
+        else { return nil }
+        if let newest = recent.last?.mtime,
+           m <= newest.addingTimeInterval(60) { return nil }
+        return url
     }
 
     private static func list(_ recent: [ReplayWatcher.ReplayFile]) {
